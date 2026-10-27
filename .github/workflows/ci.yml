@@ -1,0 +1,20 @@
+name: ci
+
+# Disabled for now: manual run only. Restore push + pull_request to re-enable.
+on:
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+      - name: Install Claude Code CLI
+        run: npm i -g @anthropic-ai/claude-code
+      - name: Validate plugin
+        run: claude plugin validate . --strict
+      - name: Test plugin
+        run: claude plugin test .
