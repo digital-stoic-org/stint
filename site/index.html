@@ -1,0 +1,653 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>stint · Run your agent in stints</title>
+  <meta name="description" content="Keep your Claude Code session under control: watch the context fill up, pit before it drifts, rejoin from the notes.">
+  <link rel="canonical" href="https://stint.digitalstoic.io/">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="stint · Run your agent in stints">
+  <meta property="og:description" content="Keep your Claude Code session under control: watch the context fill up, pit before it drifts, rejoin from the notes.">
+  <meta property="og:url" content="https://stint.digitalstoic.io/">
+</head>
+<body style="margin:0">
+<section id="v3">
+<style>
+#v3{
+  --paper:#f4ecd8; --paper-2:#ebe0c6; --card:#fbf6e8; --ink:#1f1d1a; --ink-soft:#4a463e;
+  --graphite:#3f3b35; --signal:#b93c0a; --line:#5d7083;
+  --band-bg:#23201b; --band-fg:#efe6d0; --band-orange:#ff9a55; --band-red:#ff7060;
+  --trace-red:#b3261e;
+  --trace-warn:#c2410c; --on-signal:#ffffff; --shadow-1:rgba(31,29,26,.55); --shadow-2:rgba(31,29,26,.7); --tape:rgba(214,196,150,.75); --tape-edge:rgba(93,80,50,.25); --glass:#c9d4da; --proc-bg:rgba(244,236,216,.6); --grain:rgb(92,77,51); --grain-op:.55; --tyre:#3f3b35; --pop:#f4ecd8; --hl:transparent; --claude:#A8492A;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --slab:Rockwell,"Rockwell Nova","Roboto Slab","Bookman Old Style",Georgia,serif;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+  --hand:"Segoe Print","Bradley Hand","Marker Felt","Chalkboard SE","Comic Sans MS",cursive;
+  position:relative; display:block; width:100%; overflow:hidden; isolation:isolate;
+  background-color:var(--paper);
+  color:var(--ink); font-family:var(--sans); font-size:17px; line-height:1.55;
+}
+#v3::before{
+  content:""; position:absolute; inset:0; z-index:0; pointer-events:none; opacity:var(--grain-op);
+  background-color:var(--grain);
+  -webkit-mask-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='v3-n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .36 0 0 0 0 .3 0 0 0 0 .2 0 0 0 .5 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23v3-n)'/%3E%3C/svg%3E"); mask-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='v3-n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .36 0 0 0 0 .3 0 0 0 0 .2 0 0 0 .5 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23v3-n)'/%3E%3C/svg%3E");
+  -webkit-mask-size:220px 220px; mask-size:220px 220px;
+}
+#v3 > *{position:relative;z-index:1}
+#v3 *,#v3 *::before,#v3 *::after{box-sizing:border-box}
+#v3 .wrap{max-width:1120px;margin:0 auto;padding:0 20px}
+#v3 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+#v3 .defs{position:absolute;width:0;height:0;overflow:hidden}
+#v3 .eyebrow{font:700 12px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--signal);margin:0 0 12px}
+#v3 .hand{font-family:var(--hand);font-style:italic;color:var(--signal);line-height:1.2}
+
+/* hand-drawn correction */
+#v3 s{text-decoration:line-through;text-decoration-color:var(--signal);text-decoration-thickness:2px}
+#v3 .kicker{font-family:var(--slab);font-weight:700;font-size:clamp(1.15rem,3.6vw,1.6rem);line-height:1.2;color:var(--ink);margin:0 0 10px}
+#v3 .kicker .agent-name{color:var(--claude)}
+#v3 .kicker s{text-decoration:none;padding:0 .08em;background:linear-gradient(174deg,transparent 0 45%,var(--signal) 45% 55%,transparent 55%)}
+
+/* ---------- hero ---------- */
+#v3 .hero{padding:40px 0 48px}
+#v3 .stage{display:flex;flex-direction:column;gap:22px}
+#v3 .copy{order:1}
+#v3 .map{order:2;margin:0}
+#v3 .plate{order:3}
+#v3 .hero h1{text-wrap:balance;font-family:var(--slab);font-weight:800;font-size:clamp(2rem,7vw,3.4rem);line-height:1.06;letter-spacing:-.01em;margin:0 0 16px}
+#v3 .hero h1 em{font-style:normal;text-decoration:underline wavy var(--signal);text-decoration-thickness:2.5px;text-underline-offset:7px;background:linear-gradient(transparent 58%,var(--hl) 58%)}
+#v3 .sub{font-size:clamp(1.02rem,2.4vw,1.25rem);max-width:34em;margin:0 0 14px;color:var(--ink-soft)}
+#v3 .install-link{display:inline-block;font:700 15px/1.2 var(--hand);font-style:italic;color:var(--signal);text-decoration:underline;text-decoration-style:wavy;text-underline-offset:5px;padding:4px 2px}
+#v3 .install-link:focus-visible,#v3 .foot a:focus-visible{outline:3px solid var(--signal);outline-offset:3px}
+
+/* the circuit */
+#v3 .map svg{display:block;width:100%;height:auto;color:var(--graphite);overflow:visible}
+#v3 .map figcaption{margin-top:6px;font:italic 14px/1.3 var(--hand);color:var(--ink-soft)}
+#v3 .map .track{stroke-opacity:.14}
+#v3 .map .pit-lane{stroke-opacity:.12}
+#v3 .map .track-edge{stroke:var(--graphite);stroke-width:1.6}
+#v3 .map .kerb{stroke:var(--signal);stroke-opacity:.8}
+#v3 .map .pit-lane-edge{stroke:var(--graphite);stroke-width:1.1}
+#v3 .map .pit-wall{fill:var(--graphite);fill-opacity:.7}
+#v3 .map .pit-box{stroke:var(--graphite);stroke-width:1}
+#v3 .map .pit-box-ours{fill:var(--signal);fill-opacity:.22;stroke:var(--signal);stroke-width:1.6}
+#v3 .map .pit-box-ours + .pit-box{stroke:var(--graphite)}
+#v3 .map .pit-boxes .accent{fill:var(--signal);stroke:none}
+#v3 .map .start-line rect{stroke:var(--ink)}
+#v3 .map .start-line .accent{fill:var(--ink)}
+#v3 .map .sector{stroke:var(--ink-soft);stroke-dasharray:3 3}
+#v3 .map .detail{stroke:var(--line)}
+#v3 .map .track-line{stroke:var(--graphite);stroke-opacity:.45}
+#v3 .map .pit-path{stroke:var(--line);stroke-opacity:.7}
+#v3 .map .v3-trace{fill:none;stroke:var(--signal);stroke-width:3.2;stroke-opacity:.9;stroke-linecap:round;stroke-linejoin:round}
+#v3 .map .v3-trace.z-warn{stroke:var(--trace-warn)}
+#v3 .map .v3-trace.z-alert{stroke:var(--trace-red)}
+#v3 .map .v3-pitline{fill:none;stroke:var(--trace-red);stroke-width:3.4;stroke-linecap:round;stroke-linejoin:round;opacity:0}
+#v3 .map .v3-car-marker .body{fill:var(--signal);fill-opacity:.85;stroke:var(--ink)}
+#v3 .map .v3-car-marker .glass{fill:var(--paper);stroke:var(--ink)}
+#v3 .map .v3-car-marker .fin{stroke:var(--ink)}
+#v3 .map .v3-car-marker .wing{fill:var(--ink);stroke:var(--ink)}
+#v3 .map .note{font-family:var(--hand);font-style:italic;font-size:15px;fill:var(--signal);stroke:none}
+#v3 .map .note-arrow{stroke:var(--signal);stroke-width:1.4;vector-effect:non-scaling-stroke;fill:none}
+
+/* the car plate */
+#v3 .plate{position:relative;margin:6px 0 0;max-width:430px;background:var(--card);border:2px solid var(--graphite);padding:0;transform:rotate(-1.5deg);box-shadow:3px 4px 0 var(--shadow-1);border-radius:3px 7px 4px 6px/6px 3px 7px 4px}
+#v3 .plate::before,#v3 .plate::after{content:"";position:absolute;top:-10px;width:54px;height:18px;background:var(--tape);border:1px solid var(--tape-edge)}
+#v3 .plate::before{left:14px;transform:rotate(-6deg)}
+#v3 .plate::after{right:14px;transform:rotate(5deg)}
+#v3 .plate .tb{display:flex;justify-content:space-between;align-items:baseline;gap:10px;border-bottom:1.5px solid var(--graphite);padding:7px 12px 5px;font:700 11px/1.2 var(--mono);letter-spacing:.1em;text-transform:uppercase}
+#v3 .plate .tb span{font-weight:600;letter-spacing:.04em;color:var(--ink-soft);text-transform:none}
+#v3 .plate svg{display:block;width:100%;height:auto;color:var(--graphite);padding:8px 10px 0}
+#v3 .plate .shadow{fill-opacity:.14}
+#v3 .plate .body{fill:var(--paper-2);fill-opacity:.9}
+#v3 .plate .glass{fill:var(--glass);fill-opacity:.7}
+#v3 .plate .accent{fill:var(--signal);fill-opacity:.85}
+#v3 .plate .number-plate{fill:var(--card)}
+#v3 .plate .tyre:not(.detail){fill:var(--tyre);fill-opacity:.7}
+#v3 .plate .rim:not(.detail){fill:var(--paper)}
+#v3 .plate figcaption{padding:0 12px 9px;font:italic 14px/1.3 var(--hand);color:var(--signal)}
+
+@media (min-width:1001px){
+  #v3 .hero{padding:44px 0 56px}
+  #v3 .stage{display:block;position:relative}
+  #v3 .copy{position:absolute;z-index:2;left:47%;top:21%;width:42%}
+  #v3 .hero h1{font-size:clamp(1.4rem,2.35vw,1.9rem);margin-bottom:10px}
+  #v3 .hero h1 em{white-space:nowrap}
+  #v3 .kicker{font-size:clamp(1rem,1.7vw,1.3rem);margin-bottom:8px}
+  #v3 .sub{font-size:clamp(.82rem,1.2vw,.95rem);line-height:1.4;margin-bottom:8px}
+  #v3 .eyebrow{margin-bottom:8px}
+  #v3 .plate{position:absolute;z-index:3;left:15%;top:12.5%;width:30%;max-width:none;margin:0}
+  #v3 .plate .tb{padding:5px 9px 4px;font-size:10px}
+  #v3 .plate svg{padding:4px 8px 0}
+  #v3 .plate figcaption{padding:0 9px 6px;font-size:13px}
+}
+
+/* ---------- the band figure ---------- */
+#v3 .fig{margin-top:44px}
+#v3 .fig-title{font-family:var(--hand);font-style:italic;font-weight:700;font-size:clamp(1.5rem,3.4vw,2.1rem);line-height:1.15;color:var(--ink);margin:0 0 6px;transform:rotate(-.8deg);transform-origin:left}
+#v3 .fig-head{display:flex;flex-wrap:wrap;gap:8px 16px;justify-content:space-between;align-items:baseline;border-top:2px solid var(--graphite);border-bottom:1px solid var(--graphite);padding:8px 0;margin-bottom:14px}
+#v3 .fig-head b{font:700 13px/1.3 var(--mono);letter-spacing:.08em;text-transform:uppercase}
+#v3 .demo-tag{font:700 12px/1.3 var(--mono);color:var(--signal);border:1.5px dashed var(--signal);padding:3px 8px;text-transform:lowercase}
+#v3 .toast-row{min-height:40px;display:flex;justify-content:flex-end;align-items:center;margin-bottom:8px}
+#v3 .toast{font:600 13px/1.3 var(--mono);background:var(--card);color:var(--ink);border:2px solid var(--signal);padding:6px 10px;transform:rotate(-1.2deg);opacity:0;transition:opacity .25s;border-radius:4px 9px 5px 8px/8px 4px 9px 5px}
+#v3 .toast.on{opacity:1}
+#v3 .exploded{display:grid;grid-template-columns:1fr 1.4fr 1fr 1.4fr;grid-template-rows:auto auto;transform:rotate(-.35deg)}
+#v3 .piece{position:relative;background:var(--band-bg);color:var(--band-fg);font:600 clamp(.95rem,1.6vw,1.1rem)/1.3 var(--mono);padding:18px 14px 16px;display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;min-height:64px;border-top:2px solid var(--ink);border-bottom:2px solid var(--ink)}
+#v3 .p1{grid-column:1;grid-row:1;border-left:2px solid var(--ink);border-radius:12px 0 0 9px}
+#v3 .p2{grid-column:2;grid-row:1;border-left:1px dashed rgba(239,230,208,.3)}
+#v3 .p3{grid-column:3;grid-row:1;border-left:1px dashed rgba(239,230,208,.3)}
+#v3 .p4{grid-column:4;grid-row:1;border-left:1px dashed rgba(239,230,208,.3);border-right:2px solid var(--ink);border-radius:0 9px 12px 0}
+#v3 .badge{position:absolute;top:-12px;left:10px;width:24px;height:24px;border-radius:52% 48% 55% 45%/48% 55% 45% 52%;background:var(--band-orange);color:var(--band-bg);font:700 13px/20px var(--hand);text-align:center;border:2px solid var(--ink)}
+#v3 .zone{font-size:1.5em;line-height:1}
+#v3 .pct{display:inline-block;min-width:4.2ch}
+#v3 .bar{white-space:nowrap;letter-spacing:.02em}
+#v3 .rise{display:inline-block;min-width:3ch;visibility:hidden;color:var(--band-fg)}
+#v3 .rise.on{visibility:visible}
+#v3 .z-warn .zone-col,#v3 .z-warn .pct,#v3 .z-warn .bar{color:var(--band-orange)}
+#v3 .z-alert .pct,#v3 .z-alert .bar,#v3 .z-alert .label-revs{color:var(--band-red);font-weight:800}
+#v3 .z-alert .board{color:var(--band-red);font-weight:800}
+#v3 .pct.flash{animation:v3-flash .5s ease-out 1}
+#v3 .callout{display:flex;gap:10px;align-items:flex-start;padding:6px 14px 0 8px}
+#v3 .c1{grid-column:1;grid-row:2}
+#v3 .c2{grid-column:2;grid-row:2}
+#v3 .c3{grid-column:3;grid-row:2}
+#v3 .c4{grid-column:4;grid-row:2}
+#v3 .callout svg{flex:0 0 28px;width:28px;height:48px;stroke:var(--signal);fill:none;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+#v3 .callout .t{font-size:14.5px;line-height:1.4;padding-top:22px}
+#v3 .callout .t b{display:block;font:700 17px/1.2 var(--hand);font-style:italic;color:var(--signal);margin-bottom:2px}
+#v3 .callout .t span.n{display:inline-block;width:21px;height:21px;border-radius:50% 46% 52% 48%;background:var(--signal);color:var(--on-signal);font:700 12px/21px var(--mono);text-align:center;margin-right:6px;vertical-align:1px;font-style:normal}
+#v3 .fig-note{margin:30px 0 0;text-align:right;font-size:1.2rem}
+
+/* ---------- procedure ---------- */
+#v3 .proc{padding:68px 0;border-top:2px solid var(--graphite);background:var(--proc-bg)}
+#v3 .proc h2,#v3 .proof-wrap h2{font-family:var(--slab);font-weight:800;font-size:clamp(1.7rem,4vw,2.7rem);line-height:1.1;margin:0 0 30px}
+#v3 .proc-grid{display:grid;grid-template-columns:1.6fr 1fr;gap:40px;align-items:start}
+#v3 ol.steps{list-style:none;margin:0;padding:0;position:relative}
+#v3 ol.steps::before{content:"";position:absolute;left:29px;top:30px;bottom:30px;border-left:2px dashed var(--line)}
+#v3 ol.steps li{position:relative;display:grid;grid-template-columns:60px 1fr;gap:18px;margin:0 0 26px}
+#v3 .no{position:relative;z-index:1;width:60px;height:60px;border:2.5px solid var(--ink);background:var(--paper);font:800 1.5rem/55px var(--slab);text-align:center;border-radius:54% 46% 52% 48%/48% 54% 46% 52%}
+#v3 .steps li:nth-child(2) .no{border-radius:46% 54% 48% 52%/54% 46% 52% 48%}
+#v3 .steps h3{font-family:var(--slab);font-size:1.4rem;line-height:1.2;margin:2px 0 6px}
+#v3 .steps p{margin:0;max-width:36em}
+#v3 .steps code{font:600 .92em var(--mono);background:var(--ink);color:var(--paper);padding:1px 6px}
+#v3 .steps .hand{display:block;margin-top:6px;font-size:1.1rem;transform:rotate(-1.5deg);transform-origin:left}
+#v3 .spec{border:2px solid var(--graphite);background:var(--card);box-shadow:4px 5px 0 var(--shadow-1);transform:rotate(.6deg)}
+#v3 .spec caption{caption-side:top;text-align:left;background:var(--ink);color:var(--paper);font:700 11px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;padding:8px 12px}
+#v3 table.spec{border-collapse:collapse;width:100%}
+#v3 .spec th,#v3 .spec td{text-align:left;padding:10px 12px;border-bottom:1px dashed var(--line);font-size:14.5px;vertical-align:top}
+#v3 .spec th{font:700 11px/1.2 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--ink-soft)}
+#v3 .spec tr:last-child td{border-bottom:0}
+#v3 .spec td.m{font-family:var(--mono);font-weight:600;white-space:nowrap}
+
+/* ---------- glossary ---------- */
+#v3 .gloss{border-top:1px dashed var(--line);padding:52px 0 68px}
+#v3 .gloss .lede{margin:0 0 22px;max-width:36em;color:var(--ink-soft)}
+#v3 .gloss-t{transform:rotate(-.35deg)}
+#v3 .gloss-t td{font-size:15px}
+#v3 .gloss-t td.m{width:15%}
+#v3 .gloss-t td.t1{width:36%}
+#v3 .gloss code{font:600 .92em var(--mono);background:var(--ink);color:var(--paper);padding:1px 6px}
+
+/* ---------- install ---------- */
+#v3 .inst{padding:52px 0 8px;scroll-margin-top:70px}
+#v3 .install{display:inline-block;max-width:100%;border:2px solid var(--ink);background:var(--card);box-shadow:5px 6px 0 var(--shadow-2);border-radius:3px 8px 4px 7px/7px 3px 8px 4px;transform:rotate(-.5deg)}
+#v3 .install .tab{display:block;background:var(--ink);color:var(--paper);font:700 11px/1 var(--mono);letter-spacing:.14em;padding:6px 12px;text-transform:uppercase}
+#v3 .install code{display:block;font:600 clamp(.82rem,1.7vw,1rem)/1.5 var(--mono);padding:14px 16px;overflow-wrap:anywhere;white-space:pre-wrap;color:var(--ink)}
+#v3 .req{margin:14px 0 0;font:13px/1.4 var(--mono);color:var(--ink-soft)}
+#v3 .req a{color:var(--ink);text-decoration:underline;text-underline-offset:3px}
+#v3 .req a:focus-visible{outline:3px solid var(--signal);outline-offset:3px}
+
+/* ---------- proof / roadmap / footer ---------- */
+#v3 .proof-wrap{padding:52px 0 24px}
+#v3 .proof{position:relative;border:2px solid var(--graphite);background:var(--card);padding:26px 28px;font-family:var(--slab);font-size:clamp(1.15rem,2.4vw,1.55rem);line-height:1.35;max-width:880px;border-radius:3px 9px 4px 8px/8px 3px 9px 4px}
+#v3 .proof .stamp{position:absolute;right:-8px;top:-18px;transform:rotate(5deg);border:2.5px solid var(--signal);color:var(--signal);background:var(--pop);font:800 12px/1 var(--mono);letter-spacing:.16em;padding:6px 10px;text-transform:uppercase}
+#v3 .road{margin:26px 0 0;font:600 15px/1.4 var(--mono);color:var(--ink-soft)}
+#v3 .road::before{content:"> ";color:var(--signal)}
+#v3 .foot{margin-top:48px;padding:18px 0;border-top:2px solid var(--graphite);font:13px/1.4 var(--mono)}
+#v3 .legal{margin:10px 0 0;font:12px/1.4 var(--mono);color:var(--ink-soft)}
+#v3 .foot a{color:var(--ink);text-decoration:underline;text-underline-offset:3px}
+
+@keyframes v3-flash{0%{background:rgba(255,154,85,.55);transform:scale(1.12)}100%{background:transparent;transform:scale(1)}}
+
+/* ---------- responsive ---------- */
+@media (max-width:920px){
+  #v3 .proc-grid{grid-template-columns:1fr}
+  #v3 .exploded{grid-template-columns:1fr;transform:none}
+  #v3 .p1,#v3 .p2,#v3 .p3,#v3 .p4{grid-column:1;grid-row:auto;border:2px solid var(--ink);border-radius:10px 8px 11px 7px;margin-top:20px}
+  #v3 .p1{order:1}#v3 .c1{order:2}#v3 .p2{order:3}#v3 .c2{order:4}#v3 .p3{order:5}#v3 .c3{order:6}#v3 .p4{order:7}#v3 .c4{order:8}
+  #v3 .c1,#v3 .c2,#v3 .c3,#v3 .c4{grid-column:1;grid-row:auto;padding-left:14px}
+  #v3 .callout svg{height:44px}
+  #v3 .callout .t{padding-top:18px}
+  #v3 .toast-row{justify-content:flex-start}
+}
+@media (max-width:700px){
+  #v3 .map .note,#v3 .map .note-arrow{display:none}
+}
+@media (max-width:520px){
+  #v3{font-size:16px}
+  #v3 .wrap{padding:0 16px}
+  #v3 .install{box-shadow:3px 4px 0 var(--shadow-2)}
+  #v3 ol.steps li{grid-template-columns:48px 1fr;gap:14px}
+  #v3 ol.steps::before{left:23px}
+  #v3 .no{width:48px;height:48px;font-size:1.2rem;line-height:43px}
+  #v3 .proof{padding:22px 18px}
+  #v3 .proof .stamp{right:6px}
+  #v3 .spec td.m{white-space:normal}
+}
+@media (max-width:600px){
+  #v3 .gloss-t,#v3 .gloss-t tbody,#v3 .gloss-t tr,#v3 .gloss-t td,#v3 .gloss-t caption{display:block;width:100%}
+  #v3 .gloss-t{transform:none}
+  #v3 .gloss-t thead{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+  #v3 .gloss-t tr{padding:8px 0;border-bottom:1px dashed var(--line)}
+  #v3 .gloss-t tr:last-child{border-bottom:0}
+  #v3 .gloss-t td,#v3 .spec.gloss-t tr:last-child td{border-bottom:0;padding:4px 12px;width:100%}
+  #v3 .gloss-t td.m{white-space:normal;font-size:16px;width:100%}
+  #v3 .gloss-t td.t1{width:100%}
+  #v3 .gloss-t td[data-label]::before{content:attr(data-label);display:block;font:700 10px/1.3 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--ink-soft)}
+}
+@media (prefers-reduced-motion:reduce){
+  #v3 .toast{transition:none}
+  #v3 .pct.flash{animation:none}
+}
+</style>
+
+<svg class="defs" width="0" height="0" aria-hidden="true" focusable="false">
+  <defs>
+    <filter id="v3-wobble" x="-2%" y="-2%" width="104%" height="104%">
+      <feTurbulence type="fractalNoise" baseFrequency=".022" numOctaves="2" seed="7" result="v3-n1"/>
+      <feDisplacementMap in="SourceGraphic" in2="v3-n1" scale="3.4" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
+    <filter id="v3-wobble-car" x="-2%" y="-3%" width="104%" height="106%">
+      <feTurbulence type="fractalNoise" baseFrequency=".02" numOctaves="2" seed="3" result="v3-n2"/>
+      <feDisplacementMap in="SourceGraphic" in2="v3-n2" scale="6" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
+    <filter id="v3-wobble-s" x="-10%" y="-10%" width="120%" height="120%">
+      <feTurbulence type="fractalNoise" baseFrequency=".07" numOctaves="1" seed="5" result="v3-n3"/>
+      <feDisplacementMap in="SourceGraphic" in2="v3-n3" scale="2" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
+  </defs>
+</svg>
+
+<div class="hero">
+  <div class="wrap">
+    <div class="stage">
+      <div class="copy">
+        <p class="eyebrow">Service manual · stint</p>
+        <p class="kicker">Your <s>race car</s> <span class="agent-name">Claude Code</span> agent.</p>
+        <h1>Revs climb every lap. <em>Pit before the redline.</em></h1>
+        <p class="sub">Keep your Claude Code session under control: watch the context fill up, pit before it drifts, rejoin from the notes.</p>
+        <a class="install-link" href="#v3-install">Install &#8595;</a>
+      </div>
+
+      <figure class="map">
+        <svg class="v3-circuit" role="img" aria-label="Plan view of a race circuit: the start and finish line, the pit lane with our pit box, and the racing line that traces itself lap after lap." data-asset="circuit" viewBox="40 24 940 528" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+  <g filter="url(#v3-wobble)">
+  <!-- track surface: geometric 18u stroke on the centreline -->
+  <path class="track" stroke-width="18" stroke-opacity=".08" d="M460 440 L780 440 C860 440 920 400 920 330 L920 310 C920 290 894 290 894 270 C894 250 920 250 920 230 L920 170 C920 110 880 72 820 72 C760 72 720 118 650 118 C590 118 560 72 490 72 L250 72 C170 72 125 115 125 190 C125 235 150 250 200 250 L390 250 C430 250 430 310 390 310 L220 310 C140 310 95 345 95 395 C95 425 120 440 160 440 L460 440 Z"/>
+  <!-- pit lane surface: geometric 12u stroke -->
+  <path class="pit-lane" stroke-width="12" stroke-opacity=".08" stroke-linecap="butt" d="M200 440 C230 440 240 478 280 478 L660 478 C700 478 710 440 740 440"/>
+  <!-- kerbs: geometric dashed strokes at apexes -->
+  <g class="kerb" stroke-width="3" stroke-dasharray="3 2.5" stroke-linecap="butt">
+    <path d="M841.9 419.5 L850.7 416 L858.9 412.1 L866.6 407.6 L873.6 402.8 L880.1 397.5 L886 391.7 L891.3 385.5 L895.9 379 L899.9 371.9 L903.2 364.5"/>
+    <path d="M909.2 307.9 L909 307.1 L908.7 306.5 L908.4 305.8 L907.9 305.1 L907.3 304.3 L906.6 303.5 L905.8 302.7 L904.8 301.8 L903.7 300.8 L902.4 299.8"/>
+    <path d="M911.6 280.2 L910.3 279.2 L909.2 278.2 L908.2 277.3 L907.4 276.5 L906.7 275.7 L906.1 274.9 L905.6 274.2 L905.3 273.5 L905 272.9 L904.8 272.1"/>
+    <path d="M904.8 267.9 L905 267.1 L905.3 266.5 L905.6 265.8 L906.1 265.1 L906.7 264.3 L907.4 263.5 L908.2 262.7 L909.2 261.8 L910.3 260.8 L911.6 259.8"/>
+    <path d="M902.4 240.2 L903.7 239.2 L904.8 238.2 L905.8 237.3 L906.6 236.5 L907.3 235.7 L907.9 234.9 L908.4 234.2 L908.7 233.5 L909 232.9 L909.2 232.1"/>
+    <path d="M900.2 127 L897.1 121.2 L893.5 115.8 L889.5 110.8 L885.1 106.1 L880.3 101.8 L875.1 98 L869.6 94.5 L863.6 91.4 L857.3 88.8 L850.5 86.6"/>
+    <path d="M796.4 85.2 L792.3 86.1 L788.2 87.2 L784.1 88.4 L780 89.7 L776 91.1 L771.9 92.6 L767.8 94.1 L763.7 95.8 L759.6 97.5 L755.5 99.3"/>
+    <path d="M634.4 106.2 L630.3 105.5 L626.2 104.7 L622.2 103.7 L618.3 102.5 L614.4 101.3 L610.5 99.9 L606.7 98.4 L602.9 96.9 L599 95.2 L595.2 93.5"/>
+    <path d="M191.9 93.1 L184.3 96.7 L177.2 100.8 L170.7 105.5 L164.8 110.6 L159.4 116.2 L154.6 122.3 L150.2 128.9 L146.5 136 L143.2 143.6 L140.5 151.8"/>
+    <path d="M139.5 214.4 L141.3 218.2 L143.4 221.5 L145.7 224.4 L148.5 227.1 L151.6 229.4 L155.2 231.6 L159.2 233.5 L163.9 235.1 L169 236.5 L174.7 237.6"/>
+    <path d="M400.2 262.9 L403.4 265.2 L405.9 268.2 L407.8 271.7 L409 275.7 L409.4 280 L409 284.3 L407.8 288.3 L405.9 291.8 L403.4 294.8 L400.2 297.1"/>
+    <path d="M161 329 L152.5 332.1 L144.8 335.7 L137.7 339.7 L131.4 344 L125.8 348.7 L120.9 353.7 L116.7 359 L113.2 364.5 L110.4 370.4 L108.2 376.6"/>
+    <path d="M106.8 404.6 L107.9 407.5 L109.2 410.2 L110.7 412.7 L112.6 415 L114.8 417.2 L117.4 419.2 L120.3 421.1 L123.6 422.9 L127.3 424.4 L131.4 425.8"/>
+  </g>
+  <!-- track edges: offset 9u each side of the centreline -->
+  <path class="track-edge" data-edge="outer" vector-effect="non-scaling-stroke" d="M460 449 L780 449 L789.1 448.8 L798.1 448.3 L806.9 447.5 L815.5 446.3 L823.9 444.8 L832.1 442.9 L840.1 440.7 L847.8 438.2 L855.3 435.4 L862.5 432.2 L869.4 428.7 L876 424.8 L882.4 420.7 L888.4 416.2 L894 411.3 L899.3 406.2 L904.2 400.7 L908.8 394.9 L912.9 388.8 L916.6 382.4 L919.8 375.7 L922.6 368.8 L924.9 361.5 L926.7 354 L928 346.2 L928.7 338.2 L929 330 L929 310 L928.9 307 L928.4 304 L927.7 301.3 L926.7 298.7 L925.5 296.3 L924.1 294.1 L922.7 292.1 L921.1 290.3 L919.5 288.7 L917.9 287.2 L916.3 285.9 L914.7 284.6 L913.2 283.4 L911.8 282.3 L910.4 281.3 L909.2 280.2 L908 279.3 L907 278.3 L906.1 277.4 L905.3 276.6 L904.7 275.7 L904.2 274.9 L903.8 274.1 L903.5 273.2 L903.2 272.3 L903.1 271.2 L903 270 L903.1 268.8 L903.2 267.7 L903.5 266.8 L903.8 265.9 L904.2 265.1 L904.7 264.3 L905.3 263.4 L906.1 262.6 L907 261.7 L908 260.7 L909.2 259.8 L910.4 258.7 L911.8 257.7 L913.2 256.6 L914.7 255.4 L916.3 254.1 L917.9 252.8 L919.5 251.3 L921.1 249.7 L922.7 247.9 L924.1 245.9 L925.5 243.7 L926.7 241.3 L927.7 238.7 L928.4 236 L928.9 233 L929 230 L929 170 L928.8 163 L928.3 156.1 L927.4 149.4 L926.2 142.9 L924.7 136.6 L922.8 130.5 L920.6 124.6 L918.1 119 L915.3 113.5 L912.1 108.3 L908.7 103.3 L904.9 98.6 L900.9 94.2 L896.6 90 L892 86.1 L887.2 82.5 L882.1 79.1 L876.8 76.1 L871.3 73.4 L865.5 71 L859.6 68.9 L853.4 67.1 L847.1 65.6 L840.6 64.5 L833.9 63.7 L827 63.2 L820 63 L812.9 63.2 L806 63.8 L799.2 64.7 L792.6 65.9 L786.2 67.4 L779.9 69.2 L773.6 71.1 L767.5 73.3 L761.5 75.5 L755.6 77.9 L749.7 80.4 L743.9 82.9 L738 85.5 L732.2 88 L726.4 90.5 L720.6 93 L714.7 95.4 L708.7 97.6 L702.7 99.8 L696.6 101.7 L690.4 103.5 L684.1 105.1 L677.6 106.4 L671 107.5 L664.2 108.3 L657.2 108.8 L650 109 L644 108.8 L638.1 108.3 L632.5 107.5 L627 106.5 L621.7 105.2 L616.4 103.6 L611.2 101.9 L606.1 99.9 L600.9 97.8 L595.8 95.5 L590.7 93.2 L585.5 90.7 L580.3 88.2 L575 85.6 L569.6 83 L564.1 80.5 L558.4 78 L552.6 75.6 L546.6 73.3 L540.4 71.1 L534 69.2 L527.3 67.4 L520.4 65.9 L513.3 64.7 L505.8 63.8 L498.1 63.2 L490 63 L250 63 L240.9 63.2 L232 63.7 L223.5 64.7 L215.2 65.9 L207.2 67.6 L199.5 69.6 L192 72 L184.9 74.7 L178.1 77.9 L171.5 81.3 L165.3 85.2 L159.5 89.4 L153.9 93.9 L148.8 98.8 L144 104.1 L139.5 109.6 L135.4 115.5 L131.7 121.7 L128.4 128.2 L125.5 135 L123 142.1 L120.9 149.4 L119.1 157 L117.7 164.9 L116.8 173 L116.2 181.4 L116 190 L116.1 195.3 L116.4 200.3 L117 205.2 L117.8 209.9 L118.9 214.3 L120.2 218.6 L121.8 222.7 L123.6 226.6 L125.7 230.3 L128.1 233.8 L130.7 237 L133.6 240 L136.7 242.8 L140 245.3 L143.6 247.6 L147.3 249.6 L151.3 251.4 L155.4 252.9 L159.6 254.3 L164.1 255.5 L168.7 256.5 L173.5 257.3 L178.4 257.9 L183.5 258.4 L188.9 258.7 L194.3 258.9 L200 259 L390 259 L393.2 259.2 L396.1 259.7 L398.6 260.5 L400.9 261.5 L402.9 262.7 L404.6 264.2 L406.1 265.8 L407.5 267.6 L408.6 269.6 L409.5 271.7 L410.3 274 L410.7 276.4 L411 278.8 L411 281.2 L410.7 283.6 L410.3 286 L409.5 288.3 L408.6 290.4 L407.5 292.4 L406.1 294.2 L404.6 295.8 L402.9 297.3 L400.9 298.5 L398.6 299.5 L396.1 300.3 L393.2 300.8 L390 301 L220 301 L211 301.1 L202.2 301.6 L193.7 302.3 L185.5 303.3 L177.6 304.6 L170 306.2 L162.6 308 L155.6 310.1 L148.8 312.5 L142.4 315.1 L136.3 318 L130.4 321.2 L124.9 324.6 L119.8 328.3 L114.9 332.2 L110.4 336.3 L106.3 340.7 L102.5 345.3 L99.1 350.1 L96 355.1 L93.4 360.3 L91.1 365.7 L89.3 371.3 L87.8 377 L86.8 382.9 L86.2 388.9 L86 395 L86.1 398.8 L86.5 402.6 L87.1 406.2 L87.9 409.8 L89.1 413.2 L90.4 416.5 L92 419.7 L93.8 422.7 L95.9 425.5 L98.1 428.2 L100.6 430.7 L103.2 433.1 L106 435.2 L109 437.2 L112.2 439 L115.4 440.7 L118.9 442.2 L122.4 443.5 L126.1 444.7 L129.9 445.7 L133.9 446.6 L137.9 447.3 L142.1 447.9 L146.4 448.4 L150.8 448.7 L155.4 448.9 L160 449 L460 449 Z"/>
+  <path class="track-edge" data-edge="inner" vector-effect="non-scaling-stroke" d="M460 431 L780 431 L788.5 430.8 L796.7 430.4 L804.8 429.6 L812.7 428.5 L820.3 427.1 L827.7 425.5 L834.9 423.5 L841.8 421.2 L848.4 418.7 L854.8 415.9 L860.8 412.8 L866.6 409.5 L872 405.9 L877.1 402.1 L881.9 398 L886.3 393.7 L890.4 389.1 L894.2 384.3 L897.6 379.3 L900.6 374 L903.3 368.5 L905.6 362.7 L907.5 356.7 L909 350.4 L910.1 343.9 L910.8 337.1 L911 330 L911 310 L910.9 308.8 L910.8 307.7 L910.5 306.8 L910.2 305.9 L909.8 305.1 L909.3 304.3 L908.7 303.4 L907.9 302.6 L907 301.7 L906 300.7 L904.8 299.8 L903.6 298.7 L902.2 297.7 L900.8 296.6 L899.3 295.4 L897.7 294.1 L896.1 292.8 L894.5 291.3 L892.9 289.7 L891.3 287.9 L889.9 285.9 L888.5 283.7 L887.3 281.3 L886.3 278.7 L885.6 276 L885.1 273 L885 270 L885.1 267 L885.6 264 L886.3 261.3 L887.3 258.7 L888.5 256.3 L889.9 254.1 L891.3 252.1 L892.9 250.3 L894.5 248.7 L896.1 247.2 L897.7 245.9 L899.3 244.6 L900.8 243.4 L902.2 242.3 L903.6 241.3 L904.8 240.2 L906 239.3 L907 238.3 L907.9 237.4 L908.7 236.6 L909.3 235.7 L909.8 234.9 L910.2 234.1 L910.5 233.2 L910.8 232.3 L910.9 231.2 L911 230 L911 170 L910.8 163.9 L910.4 158 L909.7 152.2 L908.6 146.7 L907.3 141.4 L905.8 136.3 L904 131.4 L901.9 126.8 L899.6 122.3 L897 118.1 L894.2 114.1 L891.2 110.3 L887.9 106.7 L884.5 103.3 L880.8 100.1 L876.9 97.2 L872.7 94.5 L868.4 92 L863.8 89.8 L859 87.8 L854.1 86 L848.9 84.5 L843.5 83.3 L837.9 82.3 L832.1 81.6 L826.2 81.1 L820 81 L813.9 81.2 L808 81.7 L802.1 82.5 L796.3 83.5 L790.6 84.9 L785 86.4 L779.3 88.2 L773.7 90.2 L768.1 92.3 L762.5 94.6 L756.8 97 L751.1 99.4 L745.3 102 L739.4 104.5 L733.5 107.1 L727.4 109.6 L721.3 112.1 L715 114.5 L708.5 116.8 L701.9 118.9 L695.1 120.9 L688.1 122.6 L680.9 124.1 L673.6 125.3 L665.9 126.2 L658.1 126.8 L650 127 L642.9 126.8 L636.1 126.2 L629.5 125.3 L623.1 124.1 L617 122.5 L611 120.8 L605.1 118.8 L599.4 116.6 L593.9 114.3 L588.4 111.9 L583 109.5 L577.7 106.9 L572.5 104.4 L567.2 101.8 L561.9 99.3 L556.7 96.9 L551.3 94.5 L545.9 92.3 L540.4 90.2 L534.8 88.2 L529 86.5 L523.1 84.9 L517 83.6 L510.6 82.5 L504 81.7 L497.2 81.2 L490 81 L250 81 L241.6 81.2 L233.6 81.7 L225.8 82.5 L218.4 83.7 L211.3 85.1 L204.5 86.9 L198 89 L191.9 91.3 L186 94 L180.5 96.9 L175.3 100.2 L170.4 103.7 L165.9 107.4 L161.6 111.5 L157.6 115.8 L154 120.4 L150.6 125.3 L147.5 130.4 L144.7 135.9 L142.3 141.6 L140.1 147.6 L138.3 154 L136.8 160.6 L135.6 167.5 L134.7 174.7 L134.2 182.2 L134 190 L134.1 194.5 L134.4 198.7 L134.8 202.6 L135.5 206.3 L136.3 209.7 L137.2 212.8 L138.3 215.7 L139.6 218.3 L141 220.8 L142.5 223 L144.2 225.1 L146 227 L148.1 228.8 L150.3 230.5 L152.7 232 L155.3 233.5 L158.2 234.8 L161.3 235.9 L164.6 237 L168.2 238 L172.1 238.8 L176.1 239.5 L180.4 240 L185 240.5 L189.7 240.8 L194.8 240.9 L200 241 L390 241 L395.3 241.3 L400.3 242.2 L405.1 243.6 L409.4 245.6 L413.4 248.1 L416.9 251 L420 254.2 L422.6 257.8 L424.7 261.5 L426.4 265.5 L427.7 269.5 L428.5 273.7 L428.9 277.9 L428.9 282.1 L428.5 286.3 L427.7 290.5 L426.4 294.5 L424.7 298.5 L422.6 302.2 L420 305.8 L416.9 309 L413.4 311.9 L409.4 314.4 L405.1 316.4 L400.3 317.8 L395.3 318.7 L390 319 L220 319 L211.6 319.1 L203.4 319.5 L195.6 320.2 L188.1 321.1 L180.8 322.3 L174 323.7 L167.4 325.4 L161.2 327.3 L155.2 329.3 L149.6 331.6 L144.4 334.1 L139.5 336.8 L134.9 339.6 L130.6 342.6 L126.7 345.8 L123 349.1 L119.8 352.6 L116.8 356.2 L114.1 360 L111.8 363.8 L109.7 367.9 L108 372 L106.6 376.3 L105.5 380.8 L104.7 385.4 L104.2 390.1 L104 395 L104.1 397.7 L104.3 400.2 L104.7 402.6 L105.3 404.9 L106 407 L106.8 409.1 L107.7 411 L108.8 412.8 L110.1 414.5 L111.4 416.1 L113 417.7 L114.7 419.2 L116.5 420.6 L118.5 421.9 L120.7 423.2 L123.1 424.4 L125.6 425.5 L128.3 426.5 L131.2 427.4 L134.2 428.2 L137.5 429 L140.8 429.6 L144.4 430.1 L148.1 430.5 L151.9 430.8 L155.9 430.9 L160 431 L460 431 Z"/>
+  <!-- pit lane edges (6u each side), trimmed where they meet the track -->
+  <path class="pit-lane-edge" vector-effect="non-scaling-stroke" d="M236.4 451.3 L238.9 453.4 L241.4 455.5 L243.8 457.5 L246.3 459.5 L248.9 461.4 L251.5 463.1 L254.1 464.8 L256.9 466.3 L259.7 467.7 L262.7 469 L265.7 470 L269 470.8 L272.4 471.5 L276.1 471.9 L280 472 L660 472 L663.9 471.9 L667.6 471.5 L671 470.8 L674.3 470 L677.3 469 L680.3 467.7 L683.1 466.3 L685.9 464.8 L688.5 463.1 L691.1 461.4 L693.7 459.5 L696.2 457.5 L698.6 455.5 L701.1 453.4 L703.6 451.3"/>
+  <path class="pit-lane-edge" vector-effect="non-scaling-stroke" d="M214.7 450 L217 451.4 L219.2 452.9 L221.6 454.6 L223.9 456.5 L226.2 458.4 L228.7 460.4 L231.1 462.5 L233.7 464.7 L236.3 466.8 L239 469 L241.9 471.1 L244.8 473.2 L248 475.1 L251.3 477 L254.8 478.7 L258.4 480.2 L262.3 481.5 L266.4 482.6 L270.7 483.3 L275.2 483.8 L280 484 L660 484 L664.8 483.8 L669.3 483.3 L673.6 482.6 L677.7 481.5 L681.6 480.2 L685.2 478.7 L688.7 477 L692 475.1 L695.2 473.2 L698.1 471.1 L701 469 L703.7 466.8 L706.3 464.7 L708.9 462.5 L711.3 460.4 L713.8 458.4 L716.1 456.5 L718.4 454.6 L720.8 452.9 L723 451.4 L725.3 450"/>
+  <!-- pit wall between main straight and pit lane -->
+  <rect class="pit-wall" x="290" y="458.5" width="362" height="3" rx="1" vector-effect="non-scaling-stroke"/>
+  <!-- garage block and 12 pit boxes -->
+  <path class="detail" stroke-width=".75" vector-effect="non-scaling-stroke" d="M286 486 L286 520 L654 520 L654 486"/>
+  <g class="pit-boxes">
+    <rect class="pit-box" x="290" y="486" width="30" height="26" vector-effect="non-scaling-stroke"/>
+    <rect class="pit-box" x="320" y="486" width="30" height="26" vector-effect="non-scaling-stroke"/>
+    <rect class="pit-box" x="350" y="486" width="30" height="26" vector-effect="non-scaling-stroke"/>
+    <rect class="pit-box" x="380" y="486" width="30" height="26" vector-effect="non-scaling-stroke"/>
+    <rect class="pit-box pit-box-ours" x="410" y="486" width="30" height="26" vector-effect="non-scaling-stroke"/>
+    <rect class="pit-box" x="440" y="486" width="30" height="26" vector-effect="non-scaling-stroke"/>
+    <rect class="pit-box" x="470" y="486" width="30" height="26" vector-effect="non-scaling-stroke"/>
+    <rect class="pit-box" x="500" y="486" width="30" height="26" vector-effect="non-scaling-stroke"/>
+    <rect class="pit-box" x="530" y="486" width="30" height="26" vector-effect="non-scaling-stroke"/>
+    <rect class="pit-box" x="560" y="486" width="30" height="26" vector-effect="non-scaling-stroke"/>
+    <rect class="pit-box" x="590" y="486" width="30" height="26" vector-effect="non-scaling-stroke"/>
+    <rect class="pit-box" x="620" y="486" width="30" height="26" vector-effect="non-scaling-stroke"/>
+    <rect class="accent" x="413" y="506" width="24" height="3" stroke-width=".75" vector-effect="non-scaling-stroke"/>
+  </g>
+  <!-- sector lines (S/F is sector 3 -> 1) -->
+  <path class="sector" data-sector="1" vector-effect="non-scaling-stroke" d="M440 59 L440 85"/>
+  <path class="sector" data-sector="2" vector-effect="non-scaling-stroke" d="M300 237 L300 263"/>
+  <!-- start / finish line with checker -->
+  <g class="start-line">
+    <rect x="460" y="431" width="6" height="18" stroke-width=".75" vector-effect="non-scaling-stroke"/>
+    <path class="accent" fill="currentColor" stroke="none" d="M460 431h3v3h-3z M463 434h3v3h-3z M460 437h3v3h-3z M463 440h3v3h-3z M460 443h3v3h-3z M463 446h3v3h-3z"/>
+  </g>
+  <!-- direction chevrons in the infield -->
+  <g class="detail direction" stroke-width=".75">
+    <path vector-effect="non-scaling-stroke" d="M623.1 414 L628.1 418 L623.1 422"/>
+    <path vector-effect="non-scaling-stroke" d="M894 204 L898 199 L902 204"/>
+    <path vector-effect="non-scaling-stroke" d="M333 98 L328 94 L333 90"/>
+    <path vector-effect="non-scaling-stroke" d="M170.3 342.2 L164.4 339.9 L167.9 334.6"/>
+  </g>
+  <!-- animation paths -->
+  <path class="track-line" stroke-width=".75" stroke-dasharray="6 5" vector-effect="non-scaling-stroke" d="M460 440 L780 440 C860 440 920 400 920 330 L920 310 C920 290 894 290 894 270 C894 250 920 250 920 230 L920 170 C920 110 880 72 820 72 C760 72 720 118 650 118 C590 118 560 72 490 72 L250 72 C170 72 125 115 125 190 C125 235 150 250 200 250 L390 250 C430 250 430 310 390 310 L220 310 C140 310 95 345 95 395 C95 425 120 440 160 440 L460 440 Z"/>
+  <path class="pit-path" stroke-width=".75" stroke-dasharray="2 4" vector-effect="non-scaling-stroke" d="M200 440 C230 440 240 478 280 478 L405 478 C413 478 413 500 425 500 C437 500 437 478 445 478 L660 478 C700 478 710 440 740 440"/>
+</g>
+  <path class="v3-trace" d="M460 440 L780 440 C860 440 920 400 920 330 L920 310 C920 290 894 290 894 270 C894 250 920 250 920 230 L920 170 C920 110 880 72 820 72 C760 72 720 118 650 118 C590 118 560 72 490 72 L250 72 C170 72 125 115 125 190 C125 235 150 250 200 250 L390 250 C430 250 430 310 390 310 L220 310 C140 310 95 345 95 395 C95 425 120 440 160 440 L460 440 Z"/>
+  <path class="v3-pitline" d="M200 440 C230 440 240 478 280 478 L405 478 C413 478 413 500 425 500 C437 500 437 478 445 478 L660 478 C700 478 710 440 740 440"/>
+  <g class="v3-car-marker" transform="translate(522 440) scale(1.3)">
+  <path class="body" vector-effect="non-scaling-stroke" d="M14 0 C14 -1.8 12.6 -3 10.6 -3.6 C10 -5.6 8.6 -6.2 6.6 -6.2 C4.4 -6.2 3.4 -5.4 2.6 -4.6 L-2.6 -4.6 C-3.6 -6 -5 -6.4 -7 -6.4 C-10 -6.4 -12 -6 -12.6 -4.4 L-13 -2 L-13 2 L-12.6 4.4 C-12 6 -10 6.4 -7 6.4 C-5 6.4 -3.6 6 -2.6 4.6 L2.6 4.6 C3.4 5.4 4.4 6.2 6.6 6.2 C8.6 6.2 10 5.6 10.6 3.6 C12.6 3 14 1.8 14 0 Z"/>
+  <ellipse class="glass" cx="1" cy="0" rx="4.2" ry="2.4" stroke-width=".75" vector-effect="non-scaling-stroke"/>
+  <path class="fin" stroke-width=".75" vector-effect="non-scaling-stroke" d="M-3.2 0 L-12.6 0"/>
+  <rect class="wing" x="-15" y="-6.8" width="2.6" height="13.6" rx=".6" vector-effect="non-scaling-stroke"/>
+</g>
+  <g aria-hidden="true">
+    <text class="note" x="456" y="419" text-anchor="end" transform="rotate(-2 456 419)">start / finish</text>
+    <text class="note" x="506" y="419" transform="rotate(-2 506 419)">our car &#8595;</text>
+    <text class="note" x="405" y="544" transform="rotate(-1.5 405 544)">pit lane &#183; our box &#8593;</text>
+  </g>
+</svg>
+        <figcaption>Plate 1 · the circuit, plan view, not to scale</figcaption>
+      </figure>
+
+      <figure class="plate">
+        <div class="tb"><b>Plate 2 · the <s>car</s> agent · side elevation</b></div>
+        <svg class="v3-car" role="img" aria-label="Pencil side-elevation drawing of a vintage open sports prototype with wire wheels." data-asset="car-vintage-profile" viewBox="20 70 960 250" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+  <g filter="url(#v3-wobble-car)">
+  <ellipse class="shadow" cx="500" cy="301" rx="430" ry="5" fill="currentColor" fill-opacity=".1" stroke="none"/>
+  <path class="detail" stroke-width=".75" vector-effect="non-scaling-stroke" d="M108 268 L56 264 C53 264 53 272 56 272 L110 274 M56 264 C58 266 58 270 56 272"/>
+  <path class="body" vector-effect="non-scaling-stroke" d="M930 262 C932 245 915 232 890 222 C840 202 800 148 745 146 C705 145 690 168 660 172 C620 176 560 176 520 172 C495 170 480 128 450 124 C410 119 330 132 255 138 C200 142 120 150 80 164 L64 158 L70 170 C68 195 68 220 74 240 C82 262 104 278 140 280 L200.5 280 A66 66 0 1 1 305.5 280 L692.5 280 A66 66 0 1 1 797.5 280 L870 280 C905 280 928 274 930 262 Z"/>
+  <path class="accent" stroke-width=".75" vector-effect="non-scaling-stroke" d="M896 225 C890 242 888 262 890 280 L872 280 C870 260 872 238 878 218 Z"/>
+  <g class="detail" stroke-width=".75">
+    <path vector-effect="non-scaling-stroke" d="M922 250 C913 251 906 256 905 263 C910 268 919 269 925 266 C926 260 925 254 922 250 Z"/>
+    <path vector-effect="non-scaling-stroke" d="M678 194 L670 230 M668 194 L660 230 M658 194 L650 230"/>
+    <path vector-effect="non-scaling-stroke" d="M642 180 C644 212 638 246 626 268 L520 268 C514 240 512 206 514 178"/>
+    <path vector-effect="non-scaling-stroke" d="M420 196 C392 192 366 200 352 220 L396 218 C404 208 412 200 420 196 Z"/>
+    <path vector-effect="non-scaling-stroke" d="M688 170 L692 158"/>
+    <ellipse cx="696" cy="154" rx="8" ry="5" vector-effect="non-scaling-stroke"/>
+    <ellipse cx="612" cy="156" rx="3.5" ry="13" transform="rotate(-20 612 156)" vector-effect="non-scaling-stroke"/>
+  </g>
+  <circle class="number-plate" cx="572" cy="222" r="30" vector-effect="non-scaling-stroke"/>
+  <path class="glass" vector-effect="non-scaling-stroke" d="M868 219 C858 213 842 203 826 196 C818 193 812 196 816 200 C828 208 850 217 868 219 Z"/>
+  <path class="glass" vector-effect="non-scaling-stroke" d="M676 178 C654 152 628 118 604 108 C590 103 570 104 558 108 C552 132 546 156 538 178 Z"/>
+  <path class="glass detail" stroke-width=".75" vector-effect="non-scaling-stroke" d="M670 176 C648 152 624 122 602 113"/>
+  <circle class="accent" cx="396" cy="134" r="5" stroke-width=".75" vector-effect="non-scaling-stroke"/>
+  <circle class="accent" cx="78" cy="190" r="5" stroke-width=".75" vector-effect="non-scaling-stroke"/>
+  <g class="wheel" data-axle="rear" transform="translate(253 240)">
+    <g class="wheel-spin">
+      <circle class="tyre" r="60" vector-effect="non-scaling-stroke"/>
+      <circle class="tyre detail" r="52" stroke-width=".75" vector-effect="non-scaling-stroke"/>
+      <circle class="rim" r="38" vector-effect="non-scaling-stroke"/>
+      <circle class="rim detail" r="34" stroke-width=".75" vector-effect="non-scaling-stroke"/>
+      <path class="rim detail spokes" stroke-width=".5" vector-effect="non-scaling-stroke" d="M9 0 L31.1 13.8 M8.8 1.8 L33.2 -7.5 M8.3 3.4 L23.4 24.7 M7.5 5 L33.5 5.8 M6.4 6.4 L12.2 31.7 M5 7.5 L28.8 18.1 M3.4 8.3 L-0.9 34 M1.8 8.8 L19.6 27.8 M0 9 L-13.8 31.1 M-1.8 8.8 L7.5 33.2 M-3.4 8.3 L-24.7 23.4 M-5 7.5 L-5.8 33.5 M-6.4 6.4 L-31.7 12.2 M-7.5 5 L-18.1 28.8 M-8.3 3.4 L-34 -0.9 M-8.8 1.8 L-27.8 19.6 M-9 0 L-31.1 -13.8 M-8.8 -1.8 L-33.2 7.5 M-8.3 -3.4 L-23.4 -24.7 M-7.5 -5 L-33.5 -5.8 M-6.4 -6.4 L-12.2 -31.7 M-5 -7.5 L-28.8 -18.1 M-3.4 -8.3 L0.9 -34 M-1.8 -8.8 L-19.6 -27.8 M0 -9 L13.8 -31.1 M1.8 -8.8 L-7.5 -33.2 M3.4 -8.3 L24.7 -23.4 M5 -7.5 L5.8 -33.5 M6.4 -6.4 L31.7 -12.2 M7.5 -5 L18.1 -28.8 M8.3 -3.4 L34 0.9 M8.8 -1.8 L27.8 -19.6"/>
+      <circle class="rim" r="9" vector-effect="non-scaling-stroke"/>
+      <path class="rim" vector-effect="non-scaling-stroke" d="M-14 -3 L14 3"/>
+    </g>
+  </g>
+  <g class="wheel" data-axle="front" transform="translate(745 240)">
+    <g class="wheel-spin">
+      <circle class="tyre" r="60" vector-effect="non-scaling-stroke"/>
+      <circle class="tyre detail" r="52" stroke-width=".75" vector-effect="non-scaling-stroke"/>
+      <circle class="rim" r="38" vector-effect="non-scaling-stroke"/>
+      <circle class="rim detail" r="34" stroke-width=".75" vector-effect="non-scaling-stroke"/>
+      <path class="rim detail spokes" stroke-width=".5" vector-effect="non-scaling-stroke" d="M9 0 L31.1 13.8 M8.8 1.8 L33.2 -7.5 M8.3 3.4 L23.4 24.7 M7.5 5 L33.5 5.8 M6.4 6.4 L12.2 31.7 M5 7.5 L28.8 18.1 M3.4 8.3 L-0.9 34 M1.8 8.8 L19.6 27.8 M0 9 L-13.8 31.1 M-1.8 8.8 L7.5 33.2 M-3.4 8.3 L-24.7 23.4 M-5 7.5 L-5.8 33.5 M-6.4 6.4 L-31.7 12.2 M-7.5 5 L-18.1 28.8 M-8.3 3.4 L-34 -0.9 M-8.8 1.8 L-27.8 19.6 M-9 0 L-31.1 -13.8 M-8.8 -1.8 L-33.2 7.5 M-8.3 -3.4 L-23.4 -24.7 M-7.5 -5 L-33.5 -5.8 M-6.4 -6.4 L-12.2 -31.7 M-5 -7.5 L-28.8 -18.1 M-3.4 -8.3 L0.9 -34 M-1.8 -8.8 L-19.6 -27.8 M0 -9 L13.8 -31.1 M1.8 -8.8 L-7.5 -33.2 M3.4 -8.3 L24.7 -23.4 M5 -7.5 L5.8 -33.5 M6.4 -6.4 L31.7 -12.2 M7.5 -5 L18.1 -28.8 M8.3 -3.4 L34 0.9 M8.8 -1.8 L27.8 -19.6"/>
+      <circle class="rim" r="9" vector-effect="non-scaling-stroke"/>
+      <path class="rim" vector-effect="non-scaling-stroke" d="M-14 -3 L14 3"/>
+    </g>
+  </g>
+</g>
+</svg>
+        <figcaption>same car, every stint</figcaption>
+      </figure>
+    </div>
+
+    <div class="fig" role="group" aria-label="Figure 1: the band, exploded view">
+      <h2 class="fig-title">On the pit wall</h2>
+      <div class="fig-head">
+        <b>Fig. 1 — The band, exploded view</b>
+        <span class="demo-tag">demo · simulated figures</span>
+      </div>
+      <div class="toast-row"><span class="toast" aria-hidden="true"></span></div>
+      <p class="sr">Animated demonstration of the stint band with simulated figures. The band shows a zone emoji, the revs percentage with a ten-cell bar, a stint counter, and a pit board message.</p>
+
+      <div class="exploded z-warn">
+        <div class="piece p1"><span class="badge">1</span><span class="zone zone-col">🔥</span></div>
+        <div class="piece p2"><span class="badge">2</span><span class="label-revs">revs</span><span class="pct">47%</span><span class="bar">▮▮▮▮▯▯▯▯▯▯</span><span class="rise"></span></div>
+        <div class="piece p3"><span class="badge">3</span><span>🏁 <span class="stint">2</span></span></div>
+        <div class="piece p4"><span class="badge">4</span><span>📋</span><span class="board">—</span></div>
+
+        <div class="callout c1"><svg viewBox="0 0 28 48" aria-hidden="true"><g filter="url(#v3-wobble-s)"><path d="M10 46 C4 34 20 24 14 8"/><path d="M7 15 L14 6 L21 14"/></g></svg><div class="t"><b><span class="n">1</span>zone emoji</b>Your zone: 🚀 under 40%, 🔥 from 40%, 🚨 from 60%.</div></div>
+        <div class="callout c2"><svg viewBox="0 0 28 48" aria-hidden="true"><g filter="url(#v3-wobble-s)"><path d="M10 46 C4 34 20 24 14 8"/><path d="M7 15 L14 6 L21 14"/></g></svg><div class="t"><b><span class="n">2</span>revs</b>How full the context window is, one cell per 10%. The ↑ is the last rise.</div></div>
+        <div class="callout c3"><svg viewBox="0 0 28 48" aria-hidden="true"><g filter="url(#v3-wobble-s)"><path d="M10 46 C4 34 20 24 14 8"/><path d="M7 15 L14 6 L21 14"/></g></svg><div class="t"><b><span class="n">3</span>🏁 stint</b>Your stint count. It appears from the second stint.</div></div>
+        <div class="callout c4"><svg viewBox="0 0 28 48" aria-hidden="true"><g filter="url(#v3-wobble-s)"><path d="M10 46 C4 34 20 24 14 8"/><path d="M7 15 L14 6 L21 14"/></g></svg><div class="t"><b><span class="n">4</span>📋 pit board</b>A short message from stint. A dash when it has nothing to say.</div></div>
+      </div>
+      <p class="fig-note hand">watch the revs, not the clock &#8599;</p>
+    </div>
+  </div>
+</div>
+
+<div class="proc">
+  <div class="wrap">
+    <p class="eyebrow">Procedure 1</p>
+    <h2>How a stint runs</h2>
+    <div class="proc-grid">
+      <ol class="steps">
+        <li>
+          <span class="no">1</span>
+          <div>
+            <h3>Watch the revs.</h3>
+            <p>A band above your prompt shows how full the context window is. At 80k tokens it turns 🔥: plan your pit. At 120k, 🚨: box this lap.</p>
+            <span class="hand">eyes on the band</span>
+          </div>
+        </li>
+        <li>
+          <span class="no">2</span>
+          <div>
+            <h3>Pit.</h3>
+            <p><code>/pit</code>: the agent writes its notes, the context clears itself, and the notes come back as the first message of a fresh window. Driver change, same race.</p>
+            <span class="hand">one command, no tools needed</span>
+          </div>
+        </li>
+        <li>
+          <span class="no">3</span>
+          <div>
+            <h3>Rejoin.</h3>
+            <p><code>/rejoin</code>: next morning, new session, same stream. The notes go in first.</p>
+            <span class="hand">pick up where you left off</span>
+          </div>
+        </li>
+      </ol>
+
+      <table class="spec">
+        <caption>Spec · zones</caption>
+        <thead><tr><th>Zone</th><th>From</th><th>Do</th></tr></thead>
+        <tbody>
+          <tr><td class="m">🚀</td><td class="m">under 40%</td><td>Keep driving.</td></tr>
+          <tr><td class="m">🔥</td><td class="m">40% · 80k</td><td>Plan your pit.</td></tr>
+          <tr><td class="m">🚨</td><td class="m">60% · 120k</td><td>Box this lap: <span style="font-family:var(--mono);font-weight:600">/pit</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="proc gloss">
+  <div class="wrap">
+    <p class="eyebrow">Glossary</p>
+    <h2>Pit-lane terms</h2>
+    <table class="spec gloss-t">
+      <caption>Glossary · pit-lane terms</caption>
+      <thead><tr><th>Term</th><th>On track</th><th>In stint</th></tr></thead>
+      <tbody>
+        <tr><td class="m">revs</td><td class="t1" data-label="On track">Engine revolutions per minute: how hard the engine works.</td><td data-label="In stint">How full the context window is, shown in the band.</td></tr>
+        <tr><td class="m">redline</td><td class="t1" data-label="On track">The top of the rev counter, where engines break.</td><td data-label="In stint">Where the agent starts to lose the thread. The band turns 🚨 before it.</td></tr>
+        <tr><td class="m">lap</td><td class="t1" data-label="On track">One turn of the circuit.</td><td data-label="In stint">One tool call, its result, and the agent's reasoning.</td></tr>
+        <tr><td class="m">stint</td><td class="t1" data-label="On track">The run between two pit stops.</td><td data-label="In stint">One context window, from fresh to pit.</td></tr>
+        <tr><td class="m">box / pit</td><td class="t1" data-label="On track">The radio call to come in, then the stop.</td><td data-label="In stint"><code>/pit</code> writes the notes and clears the window.</td></tr>
+        <tr><td class="m">driver change</td><td class="t1" data-label="On track">A fresh driver, same car, same race.</td><td data-label="In stint">A fresh window that starts from the notes.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="inst" id="v3-install">
+  <div class="wrap">
+    <p class="eyebrow">Procedure 0 · install</p>
+    <div class="install">
+      <span class="tab">Install</span>
+      <code>/plugin marketplace add digital-stoic-org/stint
+/plugin install stint@pitlane</code>
+    </div>
+    <p class="req">Requires Claude Code 2.1.311+. <a href="https://github.com/digital-stoic-org/stint">github.com/digital-stoic-org/stint</a></p>
+  </div>
+</div>
+
+<div class="proof-wrap">
+  <div class="wrap">
+    <p class="eyebrow">Inspection</p>
+    <div class="proof">
+      <span class="stamp">Measured</span>
+      Don't take our word for it. After each pit, stint shows the drop it measured on your session, never an estimate.
+    </div>
+    <p class="road">More mods are on the grid. Follow the repo.</p>
+    <div class="foot">by Digital Stoic · MIT · <a href="https://github.com/digital-stoic-org/stint">Source on GitHub</a></div>
+    <p class="legal">Not affiliated with or endorsed by Anthropic. Claude and Claude Code are trademarks of Anthropic.</p>
+  </div>
+</div>
+
+<script>
+(function(){
+  var root=document.getElementById('v3'); if(!root) return;
+  var reduce=window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if(reduce) return; /* everything static, band stays in the 🔥 state, racing line fully drawn */
+
+  var box=root.querySelector('.exploded');
+  var zoneEl=root.querySelector('.zone');
+  var pctEl=root.querySelector('.pct');
+  var barEl=root.querySelector('.bar');
+  var riseEl=root.querySelector('.rise');
+  var stintEl=root.querySelector('.stint');
+  var boardEl=root.querySelector('.board');
+  var toastEl=root.querySelector('.toast');
+  var trace=root.querySelector('.v3-trace');
+  var pitl=root.querySelector('.v3-pitline');
+  if(!trace||!pitl) return;
+
+  var L=trace.getTotalLength(), PL=pitl.getTotalLength();
+  var LAP=1700, GAP=380, PIT_DRAW=1100, PIT_HOLD=500;
+  var BASE=7, AFTER=7;
+  var deltas=[4,5,6,5,7,6,5,6,4,5];
+  var cur=BASE, idx=0, stint=2, running=false;
+  var tTick=null, tLap=null, tPit=null, tRise=null, tToast=null, tFlash=null;
+
+  function noTrans(el){ el.style.transition='none'; }
+  function reset(el,len){ noTrans(el); el.style.strokeDasharray=len; el.style.strokeDashoffset=len; }
+  reset(trace,L); trace.style.opacity=0;
+  reset(pitl,PL); pitl.style.opacity=0;
+
+  function zoneOf(p){ return p>=60?2:(p>=40?1:0); }
+  function bar(p){ var n=Math.max(0,Math.min(10,Math.floor(p/10))),s='',i; for(i=0;i<10;i++) s+= i<n?'▮':'▯'; return s; }
+
+  function paint(){
+    var z=zoneOf(cur);
+    box.className='exploded '+(z===2?'z-alert':(z===1?'z-warn':'z-ok'));
+    trace.setAttribute('class','v3-trace '+(z===2?'z-alert':(z===1?'z-warn':'z-ok')));
+    zoneEl.textContent= z===2?'🚨':(z===1?'🔥':'🚀');
+    pctEl.textContent=cur+'%';
+    barEl.textContent=bar(cur);
+    stintEl.textContent=stint;
+    boardEl.textContent= z===2?'box this lap: /pit':'—';
+  }
+  function showRise(n){
+    clearTimeout(tRise);
+    riseEl.textContent='↑'+n; riseEl.className='rise on';
+    tRise=setTimeout(function(){ riseEl.className='rise'; },3000);
+  }
+  function hideRise(){ clearTimeout(tRise); riseEl.className='rise'; }
+  function flash(){
+    clearTimeout(tFlash);
+    pctEl.classList.remove('flash'); void pctEl.offsetWidth; pctEl.classList.add('flash');
+    tFlash=setTimeout(function(){ pctEl.classList.remove('flash'); },500);
+  }
+  function toast(msg){
+    clearTimeout(tToast);
+    toastEl.textContent=msg; toastEl.classList.add('on');
+    tToast=setTimeout(function(){ toastEl.classList.remove('on'); },3200);
+  }
+
+  function drawLap(){
+    reset(trace,L); trace.style.opacity=1;
+    void trace.getBoundingClientRect();
+    trace.style.transition='stroke-dashoffset '+LAP+'ms linear';
+    trace.style.strokeDashoffset=0;
+  }
+  function lapDone(){
+    if(!running) return;
+    var prev=cur, pz=zoneOf(prev);
+    cur=cur+deltas[idx]; idx++;
+    var z=zoneOf(cur);
+    paint(); showRise(cur-prev);
+    if(z>pz){
+      flash();
+      toast(z===2?'REDLINE · box this lap: /pit':'plan your pit');
+    }
+    tTick=setTimeout(tick,GAP);
+  }
+  function tick(){
+    if(!running) return;
+    if(idx<deltas.length){
+      drawLap();
+      tLap=setTimeout(lapDone,LAP+40);
+    } else {
+      pitIn();
+    }
+  }
+  function pitIn(){
+    /* pit entry while 🚨: the racing line peels off along the pit lane, rests at our box */
+    reset(pitl,PL); pitl.style.opacity=1;
+    void pitl.getBoundingClientRect();
+    pitl.style.transition='stroke-dashoffset '+PIT_DRAW+'ms ease-in-out';
+    pitl.style.strokeDashoffset=0;
+    tPit=setTimeout(pitDone,PIT_DRAW+PIT_HOLD);
+  }
+  function pitDone(){
+    if(!running) return;
+    var before=cur;
+    cur=AFTER; idx=0; stint=stint>=9?2:stint+1;
+    hideRise(); paint();
+    toast('✅ pit done · revs '+before+'% → '+cur+'% ↓'+(before-cur));
+    trace.style.transition='opacity .7s'; trace.style.opacity=0;
+    pitl.style.transition='opacity .9s'; pitl.style.opacity=0;
+    tTick=setTimeout(tick,2600);
+  }
+
+  function start(){ if(running) return; running=true; tTick=setTimeout(tick,GAP); }
+  function stop(){
+    running=false;
+    clearTimeout(tTick); clearTimeout(tLap); clearTimeout(tPit); clearTimeout(tRise); clearTimeout(tToast); clearTimeout(tFlash);
+    pctEl.classList.remove('flash'); toastEl.classList.remove('on'); riseEl.className='rise';
+  }
+
+  paint();
+  if('IntersectionObserver' in window){
+    new IntersectionObserver(function(entries){
+      entries.forEach(function(e){ if(e.isIntersecting) start(); else stop(); });
+    },{threshold:0.15}).observe(root);
+  } else { start(); }
+})();
+</script>
+</body>
+</html>
