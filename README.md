@@ -4,7 +4,7 @@ Run your agent in stints. Pit before the redline.
 
 Requires Claude Code 2.1.311+.
 
-More at https://stint.digitalstoic.io.
+More at https://stint.digitalstoic.net.
 
 ## Install
 
