@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <meta name="theme-color" content="#f4ecd8">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <style>html,body{background:#f4ecd8}</style>
   <title>stint · Run your agent in stints</title>
   <meta name="description" content="Keep your Claude Code session under control: watch the context fill up, pit before it drifts, rejoin from the notes.">
@@ -13,6 +14,12 @@
   <meta property="og:title" content="stint · Run your agent in stints">
   <meta property="og:description" content="Keep your Claude Code session under control: watch the context fill up, pit before it drifts, rejoin from the notes.">
   <meta property="og:url" content="https://stint.digitalstoic.net/">
+  <meta property="og:image" content="https://stint.digitalstoic.net/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="stint: Keep your Claude Code session under control: watch the context fill up, pit before it drifts, rejoin from the notes.">
+  <meta property="og:site_name" content="stint">
+  <meta name="twitter:card" content="summary_large_image">
 </head>
 <body style="margin:0">
 <section id="v3">
@@ -208,8 +215,11 @@
 #v3 [id]{scroll-margin-top:64px}
 #v3 .topnav{position:sticky;top:0;z-index:30;background:var(--paper);border-bottom:1.5px solid var(--graphite)}
 #v3 .navbar{display:flex;align-items:center;flex-wrap:wrap;gap:0 22px;min-height:46px}
-#v3 .wm{order:1;font:800 15px/1 var(--mono);letter-spacing:.02em;color:var(--ink);text-decoration:none;padding:15px 0}
+#v3 .wm{order:1;display:inline-flex;align-items:center;gap:8px;font:800 15px/1 var(--mono);letter-spacing:.02em;color:var(--ink);text-decoration:none;padding:10px 0}
 #v3 .wm .br{color:var(--signal)}
+#v3 .logo-defs{position:absolute;width:0;height:0;overflow:hidden}
+#v3 .wm svg{width:26px;height:26px;flex:0 0 26px;--acc:var(--signal)}
+#v3 .foot svg{display:inline-block;vertical-align:middle;width:20px;height:20px;margin-right:10px;color:var(--ink);--acc:var(--signal)}
 #v3 .navlinks{order:2;display:flex;flex:1;gap:0 20px;list-style:none;margin:0;padding:0}
 #v3 .navlinks li{margin:0}
 #v3 .nav-item{display:inline-flex;align-items:center;font:600 13.5px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--ink);text-decoration:none;padding:16px 2px 13px;border-bottom:3px solid transparent}
@@ -314,9 +324,22 @@
 }
 </style>
 
+<svg class="logo-defs" width="0" height="0" aria-hidden="true" focusable="false">
+<defs>
+  <symbol id="b2" viewBox="0 0 64 64">
+    <g fill="none" transform="translate(0 2)">
+      <path style="stroke:currentColor" stroke-width="3.5" stroke-linecap="round" d="M13.93 41.87L7.27 44.03M13.1 34.01L6.14 33.28M15.55 26.5L9.48 23M20.83 20.63L16.72 14.97M28.05 17.42L26.59 10.57M35.95 17.42L37.41 10.57M43.17 20.63L47.28 14.97"/>
+      <path style="stroke:var(--acc,currentColor)" stroke-width="5" d="M47.59 27L56.25 22M49.9 34.12L59.85 33.07M49.12 41.56L58.63 44.65"/>
+      <path style="stroke:currentColor" stroke-width="4" stroke-linecap="round" d="M32 36L39.71 21.98"/>
+      <circle cx="32" cy="36" r="4.5" style="fill:currentColor"/>
+    </g>
+  </symbol>
+</defs>
+</svg>
+
 <header class="topnav">
   <div class="wrap navbar">
-    <a class="wm" href="index.html" aria-label="stint, home"><span class="br" aria-hidden="true">[</span>stint<span class="br" aria-hidden="true">]</span></a>
+    <a class="wm" href="index.html" aria-label="stint, home"><svg viewBox="0 0 64 64" aria-hidden="true"><use href="#b2"/></svg><span class="br" aria-hidden="true">[</span>stint<span class="br" aria-hidden="true">]</span></a>
     <ul class="navlinks" id="navlinks">
       <li><a class="nav-item" href="why-pit.html">Why pit?</a></li>
       <li><a class="nav-item" href="#procedure">Procedure</a></li>
@@ -617,7 +640,7 @@
 
 <div class="foot-wrap">
   <div class="wrap">
-    <div class="foot">by Digital Stoic · MIT · <a href="https://github.com/digital-stoic-org/stint">Source on GitHub</a></div>
+    <div class="foot"><svg viewBox="0 0 64 64" aria-hidden="true"><use href="#b2"/></svg>by Digital Stoic · MIT · <a href="https://github.com/digital-stoic-org/stint">Source on GitHub</a></div>
     <p class="legal">Not affiliated with or endorsed by Anthropic. Claude and Claude Code are trademarks of Anthropic.</p>
   </div>
 </div>

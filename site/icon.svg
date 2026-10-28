@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+    <style>
+      .ink{stroke:#1f1d1a}
+      .ink-fill{fill:#1f1d1a}
+      .accent{stroke:#b93c0a}
+      @media (prefers-color-scheme: dark){
+        .ink{stroke:#f4ecd8}
+        .ink-fill{fill:#f4ecd8}
+      }
+    </style>
+    <g fill="none">
+      <path class="ink" stroke-width="1.75" stroke-linecap="round" d="M2.8 13A6 6 0 0 1 12.46 5.99"/>
+      <path class="accent" stroke-width="2.75" d="M12.46 5.99A6 6 0 0 1 13.2 13"/>
+      <path class="ink" stroke-width="1.75" stroke-linecap="round" d="M8 10L10.02 6.32"/>
+      <circle cx="8" cy="10" r="1.6" class="ink-fill"/>
+    </g>
+</svg>
