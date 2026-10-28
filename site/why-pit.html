@@ -1,0 +1,667 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Why an agent needs pit stops · stint</title>
+  <meta name="description" content="Context 101: the context window is the fuel tank, answers degrade well before it is full, and a pit keeps the goal, the decisions and the next step.">
+  <link rel="canonical" href="https://stint.digitalstoic.net/why-pit.html">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Why an agent needs pit stops · stint">
+  <meta property="og:url" content="https://stint.digitalstoic.net/why-pit.html">
+</head>
+<body style="margin:0">
+<section id="v3">
+<style>
+#v3{
+  --paper:#f4ecd8; --paper-2:#ebe0c6; --card:#fbf6e8; --ink:#1f1d1a; --ink-soft:#4a463e;
+  --graphite:#3f3b35; --signal:#b93c0a; --line:#5d7083;
+  --band-bg:#23201b; --band-fg:#efe6d0; --band-orange:#ff9a55; --band-red:#ff7060;
+  --trace-red:#b3261e;
+  --trace-warn:#c2410c; --on-signal:#ffffff; --shadow-1:rgba(31,29,26,.55); --shadow-2:rgba(31,29,26,.7); --tape:rgba(214,196,150,.75); --tape-edge:rgba(93,80,50,.25); --glass:#c9d4da; --proc-bg:rgba(244,236,216,.6); --grain:rgb(92,77,51); --grain-op:.55; --tyre:#3f3b35; --pop:#f4ecd8; --hl:transparent; --claude:#A8492A;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --slab:Rockwell,"Rockwell Nova","Roboto Slab","Bookman Old Style",Georgia,serif;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+  --hand:"Segoe Print","Bradley Hand","Marker Felt","Chalkboard SE","Comic Sans MS",cursive;
+  position:relative; display:block; width:100%; overflow:hidden; overflow:clip; isolation:isolate;
+  background-color:var(--paper);
+  color:var(--ink); font-family:var(--sans); font-size:17px; line-height:1.55;
+}
+#v3::before{
+  content:""; position:absolute; inset:0; z-index:0; pointer-events:none; opacity:var(--grain-op);
+  background-color:var(--grain);
+  -webkit-mask-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='v3-n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .36 0 0 0 0 .3 0 0 0 0 .2 0 0 0 .5 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23v3-n)'/%3E%3C/svg%3E"); mask-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='v3-n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .36 0 0 0 0 .3 0 0 0 0 .2 0 0 0 .5 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23v3-n)'/%3E%3C/svg%3E");
+  -webkit-mask-size:220px 220px; mask-size:220px 220px;
+}
+#v3 > *{position:relative;z-index:1}
+#v3 *,#v3 *::before,#v3 *::after{box-sizing:border-box}
+#v3 .wrap{max-width:1120px;margin:0 auto;padding:0 20px}
+#v3 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+#v3 .eyebrow{font:700 12px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--signal);margin:0 0 12px}
+#v3 .hand{font-family:var(--hand);font-style:italic;color:var(--signal);line-height:1.2}
+
+/* ---------- sticky top nav ---------- */
+#v3 [id]{scroll-margin-top:64px}
+#v3 .topnav{position:sticky;top:0;z-index:30;background:var(--paper);border-bottom:1.5px solid var(--graphite)}
+#v3 .navbar{display:flex;align-items:center;flex-wrap:wrap;gap:0 22px;min-height:46px}
+#v3 .wm{order:1;font:800 15px/1 var(--mono);letter-spacing:.02em;color:var(--ink);text-decoration:none;padding:15px 0}
+#v3 .wm .br{color:var(--signal)}
+#v3 .navlinks{order:2;display:flex;flex:1;gap:0 20px;list-style:none;margin:0;padding:0}
+#v3 .navlinks li{margin:0}
+#v3 .nav-item{display:inline-flex;align-items:center;font:600 13.5px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--ink);text-decoration:none;padding:16px 2px 13px;border-bottom:3px solid transparent}
+#v3 a.nav-item[href]:hover{border-bottom-color:var(--signal)}
+#v3 .nav-item[aria-current]{border-bottom-color:var(--ink)}
+#v3 .nav-item.off{color:var(--ink-soft);opacity:.55;cursor:not-allowed}
+#v3 .nav-item .soon{margin-left:7px;font:700 10.5px/1 var(--mono);letter-spacing:.06em;text-transform:lowercase;border:1px dashed currentColor;padding:2px 4px}
+#v3 .btn-install{order:3;font:700 12px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;background:var(--signal);color:var(--on-signal);text-decoration:none;padding:8px 14px;border:2px solid var(--ink);border-radius:3px 7px 4px 6px/6px 3px 7px 4px;box-shadow:2px 3px 0 var(--shadow-1)}
+#v3 .btn-install:hover{background:var(--ink);color:var(--paper)}
+#v3 .menu-toggle{order:4;display:none;font:700 11px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--ink);background:transparent;border:2px solid var(--graphite);border-radius:3px 7px 4px 6px/6px 3px 7px 4px;padding:8px 10px;cursor:pointer}
+#v3 .menu-toggle[aria-expanded="true"]{background:var(--ink);color:var(--paper)}
+#v3 .wm:focus-visible,#v3 .nav-item:focus-visible,#v3 .btn-install:focus-visible,#v3 .menu-toggle:focus-visible{outline:3px solid var(--signal);outline-offset:2px}
+
+
+/* ---------- install ---------- */
+#v3 .install{display:inline-block;max-width:100%;border:2px solid var(--ink);background:var(--card);box-shadow:5px 6px 0 var(--shadow-2);border-radius:3px 8px 4px 7px/7px 3px 8px 4px;transform:rotate(-.5deg)}
+#v3 .install .tab{display:block;background:var(--ink);color:var(--paper);font:700 11px/1 var(--mono);letter-spacing:.14em;padding:6px 12px;text-transform:uppercase}
+#v3 .install code{display:block;font:600 clamp(.82rem,1.7vw,1rem)/1.5 var(--mono);padding:14px 16px;overflow-wrap:anywhere;white-space:pre-wrap;color:var(--ink)}
+#v3 .req{margin:14px 0 0;font:13px/1.4 var(--mono);color:var(--ink-soft)}
+#v3 .req a{color:var(--ink);text-decoration:underline;text-underline-offset:3px}
+#v3 .req a:focus-visible{outline:3px solid var(--signal);outline-offset:3px}
+#v3 .legal{margin:10px 0 0;font:12px/1.4 var(--mono);color:var(--ink-soft)}
+#v3 .foot a{color:var(--ink);text-decoration:underline;text-underline-offset:3px}
+#v3 .foot{margin:0;padding:18px 0 0;font:13px/1.4 var(--mono)}
+#v3 .foot-wrap{padding:0 0 30px}
+#v3 .foot a:focus-visible{outline:3px solid var(--signal);outline-offset:3px}
+/* ---------- roadmap teaser ---------- */
+#v3 .roadbar{border-top:2px solid var(--graphite);border-bottom:1px solid var(--graphite);background:var(--paper-2)}
+#v3 .roadbar-in{display:flex;flex-wrap:wrap;gap:10px 24px;justify-content:space-between;align-items:center;padding-top:14px;padding-bottom:14px}
+#v3 .roadbar .eyebrow{margin:0 0 5px}
+#v3 .road-t{margin:0;font:600 15px/1.4 var(--mono);color:var(--ink-soft)}
+#v3 .road-r{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center}
+#v3 .soon-tag{font:700 12px/1.3 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--signal);border:1.5px dashed var(--signal);padding:3px 8px}
+#v3 .road-r a{font:600 13px/1.4 var(--mono);color:var(--ink);text-decoration:underline;text-underline-offset:3px}
+#v3 .road-r a:focus-visible{outline:3px solid var(--signal);outline-offset:3px}
+
+
+/* ---------- why-pit page ---------- */
+#v3 .legend-strip{position:relative;margin:12px 0 0;font:11px/1.4 var(--mono);color:var(--ink-soft)}
+#v3 .legend-chips{display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;margin:0;padding:0;list-style:none}
+#v3 .legend-lead{margin-right:4px;font:11px/1.2 var(--mono);color:var(--ink-soft)}
+#v3 .legend-chip{font:11px/1.2 var(--mono);color:var(--ink-soft);background:transparent;border:1px solid var(--line);border-radius:10px;padding:3px 8px;cursor:pointer;white-space:nowrap}
+#v3 .legend-chip:hover{background:var(--paper-2)}
+#v3 .legend-chip[aria-pressed="true"]{background:var(--ink-soft);color:var(--paper);border-color:var(--ink-soft);text-decoration:underline;text-underline-offset:3px}
+#v3 .legend-chip:focus-visible{outline:3px solid var(--signal);outline-offset:2px}
+#v3 .legend-pop{position:absolute;top:0;left:0;z-index:5;width:max-content;max-width:min(260px,100%);margin:0;padding:7px 9px;background:var(--card);border:1px solid var(--graphite);box-shadow:2px 3px 0 var(--shadow-1);font:11px/1.4 var(--mono);color:var(--ink-soft);opacity:0;visibility:hidden;pointer-events:none;transition:opacity .12s ease-out,visibility 0s .12s}
+#v3 .legend-pop.open{opacity:1;visibility:visible;transition:opacity .12s ease-out}
+#v3 .legend-sr{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+@media (prefers-reduced-motion:reduce){#v3 .legend-pop,#v3 .legend-pop.open{transition:none}}
+#v3 #f2{background:transparent;padding:0 0 60px}
+#v3 .cta{padding:12px 0 8px;scroll-margin-top:70px}
+#v3 .cta-links{margin:14px 0 0;font:600 14px/1.6 var(--mono)}
+#v3 .cta-links a{color:var(--ink);text-decoration:underline;text-underline-offset:3px}
+#v3 .cta-links a:focus-visible{outline:3px solid var(--signal);outline-offset:3px}
+#v3 .cta-links span{margin:0 8px;color:var(--ink-soft)}
+#v3 .cta .req{margin-top:12px}
+#v3 .cta-hand{margin:0 0 14px;font-size:1.25rem;transform:rotate(-1.2deg);transform-origin:left}
+#v3 .cta-wrap{padding-bottom:56px}
+@media (max-width:520px){
+  #v3{font-size:16px}
+  #v3 .wrap{padding:0 16px}
+  #v3 .install{box-shadow:3px 4px 0 var(--shadow-2)}
+}
+
+
+@media (max-width:860px){
+  #v3 .navbar{gap:0 14px}
+  #v3 .navlinks{gap:0 12px}
+}
+@media (max-width:599px){
+  #v3 .navbar{gap:0 10px}
+  #v3 .wm{margin-right:auto}
+  #v3 .btn-install{order:2}
+  #v3 .menu-toggle{display:inline-block}
+  #v3 .navlinks{order:5;flex:0 0 100%;flex-direction:column;gap:0;border-top:1px dashed var(--line);margin-top:2px}
+  #v3 .topnav.js .navlinks{display:none}
+  #v3 .topnav.js.open .navlinks{display:flex}
+  #v3 .navlinks li + li{border-top:1px dashed var(--line)}
+  #v3 .nav-item{display:flex;width:100%;font-size:15px;padding:14px 2px;border-bottom:0}
+  #v3 a.nav-item[href]:hover{border-bottom:0;color:var(--signal)}
+  #v3 .roadbar-in{flex-direction:column;align-items:flex-start}
+}
+
+</style>
+<style>
+
+#f2{
+  --paper:#f4ecd8; --paper-2:#ebe0c6; --card:#fbf6e8; --ink:#1f1d1a; --ink-soft:#4a463e;
+  --graphite:#3f3b35; --signal:#b93c0a; --line:#5d7083; --trace-red:#b3261e; --trace-warn:#c2410c;
+  --shadow-1:rgba(31,29,26,.55); --claude:#A8492A;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --slab:Rockwell,"Rockwell Nova","Roboto Slab","Bookman Old Style",Georgia,serif;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+  --hand:"Segoe Print","Bradley Hand","Marker Felt","Chalkboard SE","Comic Sans MS",cursive;
+  display:block;background:var(--paper);color:var(--ink);font:16px/1.55 var(--sans);padding:32px 0 40px;
+}
+#f2 *,#f2 *::before,#f2 *::after{box-sizing:border-box}
+#f2 .wrap{max-width:1120px;margin:0 auto;padding:0 20px}
+
+/* verdict (hero) */
+#f2 .verdict{margin:4px 0 22px}
+#f2 .hero{margin:0;max-width:24ch;font:800 clamp(1.75rem,5.6vw,3.2rem)/1.12 var(--slab);letter-spacing:-.01em;text-wrap:balance}
+#f2 .hero .va{color:var(--graphite);text-decoration:underline dashed 3px;text-underline-offset:6px}
+#f2 .hero .vb{color:var(--claude);text-decoration:underline solid 3px;text-underline-offset:6px}
+#f2 .hero .x{display:inline-block;background:var(--signal);color:#fff;padding:0 .28em .04em;transform:rotate(-1deg);box-shadow:3px 4px 0 var(--shadow-1)}
+#f2 .hero.flash{animation:f2-flash .35s ease-out}
+@keyframes f2-flash{from{opacity:.4}to{opacity:1}}
+#f2 .sent{max-width:none;margin:14px 0 0;font-size:17px;color:var(--ink-soft)}
+#f2 .diff{margin:8px 0 0;font:600 13px/1.4 var(--mono);color:var(--ink-soft)}
+
+/* chart toolbar */
+#f2 .bar{display:flex;flex-wrap:wrap;gap:10px 20px;justify-content:space-between;align-items:center;margin:0 0 10px}
+#f2 .bar fieldset{border:0;margin:0;padding:0;display:flex;align-items:center;gap:8px;min-width:0}
+#f2 .bar legend{float:left;padding:0;margin-right:8px;font:700 11px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--ink-soft)}
+#f2 .keys{display:flex;flex-wrap:wrap;gap:6px 16px;margin:0;font:700 12px/1.3 var(--mono)}
+#f2 .keys span{display:inline-flex;align-items:center;gap:7px}
+#f2 .key{display:inline-block;width:28px;height:0;border-top:3px dashed var(--graphite);vertical-align:middle}
+#f2 .key-b{border-top-style:solid;border-top-color:var(--claude)}
+#f2 .key-pit{width:9px;height:9px;border:2px solid var(--ink);border-radius:50%;background:var(--card)}
+
+/* segmented radios */
+#f2 .seg{display:inline-flex;flex-wrap:wrap;border:2px solid var(--graphite);background:var(--card);border-radius:3px 7px 4px 6px/6px 3px 7px 4px;box-shadow:2px 3px 0 var(--shadow-1);overflow:hidden}
+#f2 .seg input{position:absolute;opacity:0;width:1px;height:1px}
+#f2 .seg label{padding:6px 11px;font:700 12px/1.2 var(--mono);cursor:pointer;color:var(--ink);white-space:nowrap}
+#f2 .seg label + input + label{border-left:1.5px solid var(--graphite)}
+#f2 .seg input:checked + label{background:var(--ink);color:var(--paper)}
+#f2 .seg input:focus-visible + label{outline:3px solid var(--signal);outline-offset:-3px}
+#f2 .seg label:hover{background:var(--paper-2)}
+#f2 .seg input:checked + label:hover{background:var(--ink)}
+
+/* chart */
+#f2 .chart{border:2px solid var(--graphite);background:var(--card);box-shadow:3px 4px 0 var(--shadow-1);border-radius:3px 7px 4px 6px/6px 3px 7px 4px;padding:6px}
+#f2 svg{display:block;width:100%;height:auto;font-family:var(--mono);overflow:visible}
+#f2 .grid{stroke:var(--graphite);stroke-opacity:.18;stroke-width:1}
+#f2 .axis{stroke:var(--graphite);stroke-width:1.5}
+#f2 .tick{font-size:10.5px;fill:var(--ink-soft)}
+#f2 .axtitle{font-size:10.5px;font-weight:700;letter-spacing:.1em;fill:var(--ink-soft);text-transform:uppercase}
+#f2 .s-a{fill:none;stroke:var(--graphite);stroke-width:2.4;stroke-dasharray:7 5;stroke-linejoin:round}
+#f2 .s-b{fill:none;stroke:var(--claude);stroke-width:2.8;stroke-linejoin:round}
+#f2 .cap-a{stroke:var(--graphite);stroke-opacity:.55;stroke-width:1.2;stroke-dasharray:2 4}
+#f2 .cap-b{stroke:var(--claude);stroke-opacity:.6;stroke-width:1.2;stroke-dasharray:2 4}
+#f2 .caplab{font-size:10px;font-weight:700;letter-spacing:.06em;fill:var(--ink-soft)}
+#f2 .pit{fill:var(--card);stroke:var(--ink);stroke-width:1.6}
+#f2 .lab{font-size:11.5px;font-weight:700;paint-order:stroke;stroke:var(--card);stroke-width:3px}
+#f2 .lab-a{fill:var(--graphite)}
+#f2 .lab-b{fill:var(--claude)}
+#f2 .assume{margin:10px 0 0;font:12px/1.5 var(--mono);color:var(--ink-soft)}
+
+/* presets */
+#f2 .presets{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;margin:26px 0 14px}
+#f2 .presets .pl{font:700 11px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--ink-soft);margin-right:4px}
+#f2 .pre{font:700 12px/1.2 var(--mono);color:var(--ink);background:var(--card);border:2px solid var(--graphite);border-radius:3px 7px 4px 6px/6px 3px 7px 4px;box-shadow:2px 3px 0 var(--shadow-1);padding:7px 12px;cursor:pointer}
+#f2 .pre:hover{background:var(--paper-2)}
+#f2 .pre[aria-pressed="true"]{background:var(--ink);color:var(--paper)}
+
+/* driver cards */
+#f2 .drivers{display:grid;grid-template-columns:1fr;gap:18px}
+#f2 .drv{border:2px solid var(--graphite);border-top:6px dashed var(--graphite);background:var(--card);padding:12px 16px 14px;box-shadow:3px 4px 0 var(--shadow-1);border-radius:3px 8px 4px 7px/7px 3px 8px 4px;min-width:0}
+#f2 .drv-b{border-top:6px solid var(--claude)}
+#f2 .drv h3{margin:0 0 4px;font:800 1.15rem/1.2 var(--slab)}
+#f2 .drv-b h3{color:var(--claude)}
+#f2 .drv fieldset{border:0;margin:0;padding:0;min-width:0}
+#f2 .drv legend,#f2 .drv .lbl{display:block;padding:0;margin:0 0 5px;font:700 11px/1.2 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--ink-soft)}
+#f2 .drv legend a{margin-left:6px;letter-spacing:.04em;text-transform:none;color:var(--ink);text-decoration:underline;text-underline-offset:2px}
+#f2 .row{margin:12px 0 0}
+#f2 .drv select{width:100%;font:700 13px/1.2 var(--mono);color:var(--ink);background:var(--paper);border:2px solid var(--graphite);border-radius:3px 6px 4px 5px;padding:7px 8px}
+#f2 .laps{display:flex;align-items:center;gap:10px}
+#f2 .laps input{flex:1;min-width:0;accent-color:var(--claude)}
+#f2 .laps output{min-width:3.2em;text-align:right;font:700 14px/1 var(--mono)}
+#f2 .sw{display:inline-flex;align-items:center;gap:8px;font:700 12.5px/1.2 var(--mono);cursor:pointer}
+#f2 .sw input{width:18px;height:18px;accent-color:var(--claude)}
+#f2 .price,#f2 .hint{margin:6px 0 0;font:11.5px/1.45 var(--mono);color:var(--ink-soft)}
+#f2 .price a,#f2 .assume a,#f2 .effnote a,#f2 .how a{color:var(--ink);text-decoration:underline;text-underline-offset:2px}
+#f2 .res{display:grid;grid-template-columns:1fr 1fr;gap:8px 14px;margin:14px 0 0;padding:12px 0 0;border-top:1px dashed var(--line)}
+#f2 .res dt{font:700 10.5px/1.3 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--ink-soft)}
+#f2 .res dd{margin:2px 0 0;font:800 1.7rem/1.1 var(--slab)}
+#f2 .drv-b .res dd{color:var(--claude)}
+#f2 .res .sub{display:block;margin-top:3px;font:600 11px/1.35 var(--mono);color:var(--ink-soft)}
+#f2 .effnote{margin:16px 0 0;font:12px/1.5 var(--mono);color:var(--ink-soft)}
+
+/* how this is computed */
+#f2 .how{margin:18px 0 0;border:2px dashed var(--graphite);background:var(--card);border-radius:3px 7px 4px 6px/6px 3px 7px 4px}
+#f2 .how summary{cursor:pointer;padding:10px 14px;font:700 12px/1.3 var(--mono);letter-spacing:.1em;text-transform:uppercase}
+#f2 .how-in{padding:0 16px 16px;font-size:15px}
+#f2 .asm{display:grid;grid-template-columns:1fr;gap:10px 18px;margin:4px 0 12px}
+#f2 .asm label{display:flex;justify-content:space-between;align-items:center;gap:10px;font:600 12.5px/1.3 var(--mono)}
+#f2 .asm input{width:7.5em;font:700 13px/1.2 var(--mono);color:var(--ink);background:var(--paper);border:2px solid var(--graphite);padding:5px 6px;text-align:right}
+#f2 .how ol{margin:0;padding-left:1.3em}
+#f2 .how li{margin:0 0 6px}
+#f2 .etab{border-collapse:collapse;margin:10px 0 6px;font:12.5px/1.4 var(--mono)}
+#f2 .etab th,#f2 .etab td{text-align:left;padding:5px 10px;border-bottom:1px dashed var(--line)}
+#f2 .etab th{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft)}
+#f2 .how p{margin:8px 0 0}
+
+#f2 a:focus-visible,#f2 select:focus-visible,#f2 input:focus-visible,#f2 .pre:focus-visible,#f2 summary:focus-visible{outline:3px solid var(--signal);outline-offset:2px}
+
+@media (min-width:720px){
+  #f2 .drivers{grid-template-columns:1fr 1fr}
+  #f2 .asm{grid-template-columns:1fr 1fr}
+}
+@media (max-width:620px){
+  #f2 .wrap{padding:0 14px}
+  #f2 .seg label{padding:6px 9px}
+  #f2 .sent{font-size:16px}
+}
+@media (prefers-reduced-motion:reduce){
+  #f2 .hero.flash{animation:none}
+}
+#f2 .keys span[hidden]{display:none}
+
+</style>
+
+<header class="topnav">
+  <div class="wrap navbar">
+    <a class="wm" href="index.html" aria-label="stint, home"><span class="br" aria-hidden="true">[</span>stint<span class="br" aria-hidden="true">]</span></a>
+    <ul class="navlinks" id="navlinks">
+      <li><a class="nav-item" href="why-pit.html" aria-current="page">Why pit?</a></li>
+      <li><a class="nav-item" href="index.html#procedure">Procedure</a></li>
+      <li><a class="nav-item" href="index.html#glossary">Glossary</a></li>
+      <li><a class="nav-item off" role="link" aria-disabled="true" tabindex="-1">Roadmap<span class="soon">soon</span></a></li>
+    </ul>
+    <a class="btn-install" href="#install">Install</a>
+    <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="navlinks">Menu</button>
+  </div>
+</header>
+
+<section id="f2" aria-label="Cost simulation">
+<div class="wrap">
+  <div class="verdict">
+    <p class="hero" id="hero"></p>
+    <p class="sent" id="sent"></p>
+    <p class="diff" id="diff"></p>
+    <p class="sr" id="live" aria-live="polite" aria-atomic="true"></p>
+  </div>
+
+  <div class="bar">
+    <fieldset><legend>Show</legend><div class="seg">
+      <input type="radio" name="view" id="v-cost" value="cost" checked><label for="v-cost">Cumulative cost</label>
+      <input type="radio" name="view" id="v-ctx" value="ctx"><label for="v-ctx">Context size</label></div></fieldset>
+    <p class="keys" aria-hidden="true"><span><i class="key"></i>Driver A</span><span><i class="key key-b"></i>Driver B</span><span id="key-pit"><i class="key key-pit"></i>pit stop</span></p>
+  </div>
+  <div class="chart"><svg id="svg" role="img" aria-label="Simulation chart"></svg></div>
+  <p class="assume" id="assume"></p>
+  <div class="legend-strip" role="group" aria-label="Legend">
+    <ul class="legend-chips">
+      <li class="legend-lead">What does it mean?</li>
+      <li><button type="button" class="legend-chip" data-t="agent" aria-pressed="false" aria-describedby="legend-d-agent"><span aria-hidden="true">🏎️</span> agent</button></li>
+      <li><button type="button" class="legend-chip" data-t="lap" aria-pressed="false" aria-describedby="legend-d-lap"><span aria-hidden="true">🔁</span> lap</button></li>
+      <li><button type="button" class="legend-chip" data-t="context" aria-pressed="false" aria-describedby="legend-d-context"><span aria-hidden="true">⛽</span> context</button></li>
+      <li><button type="button" class="legend-chip" data-t="stint" aria-pressed="false" aria-describedby="legend-d-stint"><span aria-hidden="true">🏁</span> stint</button></li>
+      <li><button type="button" class="legend-chip" data-t="pit" aria-pressed="false" aria-describedby="legend-d-pit"><span aria-hidden="true">🔧</span> pit stop</button></li>
+      <li><button type="button" class="legend-chip" data-t="handoff" aria-pressed="false" aria-describedby="legend-d-handoff"><span aria-hidden="true">📝</span> handoff</button></li>
+      <li><button type="button" class="legend-chip" data-t="cache" aria-pressed="false" aria-describedby="legend-d-cache"><span aria-hidden="true">💾</span> cached input</button></li>
+      <li><button type="button" class="legend-chip" data-t="effort" aria-pressed="false" aria-describedby="legend-d-effort"><span aria-hidden="true">🎚️</span> effort</button></li>
+    </ul>
+    <div class="legend-pop" id="legend-pop" aria-hidden="true"></div>
+    <span class="legend-sr" id="legend-d-agent">Agent / session = the driver: a model working on your task, from first prompt to last.</span>
+    <span class="legend-sr" id="legend-d-lap">Lap = one agent turn, one call to the model.</span>
+    <span class="legend-sr" id="legend-d-context">Context = everything the model re-reads on each lap; it grows lap after lap.</span>
+    <span class="legend-sr" id="legend-d-stint">Stint = a stretch of laps between two pit stops.</span>
+    <span class="legend-sr" id="legend-d-pit">Pit stop = reset the context to a short handoff, then keep racing.</span>
+    <span class="legend-sr" id="legend-d-handoff">Handoff / seed = the notes that survive a pit: goal, decisions, next step. They seed the next stint.</span>
+    <span class="legend-sr" id="legend-d-cache">Cached input = context already sent, re-read at a lower rate.</span>
+    <span class="legend-sr" id="legend-d-effort">Effort = how much the model thinks and writes per lap; more effort, more output tokens.</span>
+  </div>
+
+  <div class="presets" role="group" aria-label="Presets">
+    <span class="pl" aria-hidden="true">Presets</span>
+    <button type="button" class="pre" data-p="0" aria-pressed="true">Long session vs stints</button>
+    <button type="button" class="pre" data-p="1" aria-pressed="false">Same model, pit or not</button>
+    <button type="button" class="pre" data-p="2" aria-pressed="false">Cache on vs off</button>
+  </div>
+
+  <div class="drivers" id="drivers"></div>
+
+  <p class="effnote">Effort scales output tokens per lap: low 0.52 · medium 1.00 · high 1.38 · xhigh 3.52 · max 5.0 (placeholder). An approximation derived from the official cost-per-task benchmark, not an official token ratio. <a href="https://platform.claude.com/docs/en/build-with-claude/effort" target="_blank" rel="noopener">Effort docs</a></p>
+
+  <details class="how">
+    <summary>How this is computed</summary>
+    <div class="how-in">
+      <div class="asm">
+        <label for="as-add">New input tokens per lap <input type="number" id="as-add" min="0" max="50000" step="500" value="3000"></label>
+        <label for="as-out">Output tokens per lap, default effort <input type="number" id="as-out" min="0" max="50000" step="100" value="1500"></label>
+        <label for="as-seed">Handoff seed after a pit <input type="number" id="as-seed" min="0" max="100000" step="1000" value="5000"></label>
+        <label for="as-cap">Pit at % of window <input type="number" id="as-cap" min="50" max="95" step="1" value="83"></label>
+      </div>
+      <ol>
+        <li>A lap is one call. Its prompt is the whole context so far plus the new input of the lap (tool results, user turn).</li>
+        <li>The reply is billed at the output price and appended to the context. Its size is the base output times the effort multiplier.</li>
+        <li>Cached input on: the prompt already sent on the previous call is read at the cache-read price, and everything new since then (last reply and new input) is written at the 5-minute cache-write price. Cached input off: the whole prompt is billed at the base input price.</li>
+        <li>Stints are deduced, not chosen. Before a lap, if the prompt would cross the pit threshold, the agent pits. A pit costs one extra call that reads the context and writes the handoff as output. The next stint starts from the handoff seed with a cold cache.</li>
+        <li>Haiku 5.5 is tiered by prompt size: each call uses the rates for prompts up to 100k tokens or over 100k tokens.</li>
+        <li>Not modelled: cache expiry between laps (laps are assumed to come within 5 minutes), system prompt and tool definitions, batch or regional pricing, and answer quality as the context grows.</li>
+      </ol>
+      <table class="etab">
+        <caption class="sr">Effort output multipliers</caption>
+        <thead><tr><th scope="col">Effort</th><th scope="col">Multiplier</th><th scope="col">Source: Opus 5.5 cost per task</th></tr></thead>
+        <tbody>
+          <tr><td>low</td><td>0.52</td><td>$0.11 / $0.21</td></tr>
+          <tr><td>medium</td><td>1.00</td><td>$0.21, default</td></tr>
+          <tr><td>high</td><td>1.38</td><td>$0.29 / $0.21</td></tr>
+          <tr><td>xhigh</td><td>3.52</td><td>$0.74 / $0.21</td></tr>
+          <tr><td>max</td><td>5.0</td><td>placeholder, no published data</td></tr>
+        </tbody>
+      </table>
+      <p>Each model's default level is rescaled to 1.00, so Sonnet 5.5 and Fable 5.1 (default high) divide these values by 1.38. Cross-check against the other published figures: Sonnet 5.5 medium costs about 59% of high (this table gives 72%), and Fable 5.1 low costs $4.48 against $6.89 for high (65%; this table gives 38%). Source: the SWE-bench Pro subset in the <a href="https://platform.claude.com/docs/en/build-with-claude/effort" target="_blank" rel="noopener">effort docs</a>. Prices: <a href="https://platform.claude.com/docs/en/about-claude/pricing" target="_blank" rel="noopener">prices as of 2026-10-28</a>.</p>
+    </div>
+  </details>
+  <noscript><p class="assume">This simulation needs JavaScript.</p></noscript>
+</div>
+</section>
+
+<div class="cta" id="install">
+  <div class="wrap cta-wrap">
+    <p class="eyebrow">Procedure 0 · install</p>
+    <p class="hand cta-hand">ready to pit?</p>
+    <div class="install">
+      <span class="tab">Install</span>
+      <code>/plugin marketplace add digital-stoic-org/stint
+/plugin install stint@pitlane</code>
+    </div>
+    <p class="req">Requires Claude Code 2.1.311+. <a href="https://github.com/digital-stoic-org/stint">github.com/digital-stoic-org/stint</a></p>
+    <p class="cta-links"><a href="index.html">&larr; Back to stint</a><span>·</span><a href="index.html#procedure">How a stint runs</a></p>
+  </div>
+</div>
+
+<div class="roadbar">
+  <div class="wrap roadbar-in">
+    <div class="road-l">
+      <p class="eyebrow">Next season · roadmap</p>
+      <p class="road-t">More mods are on the grid.</p>
+    </div>
+    <div class="road-r">
+      <span class="soon-tag">Coming soon</span>
+      <a href="https://github.com/digital-stoic-org/stint">Watch the repo on GitHub &rarr;</a>
+    </div>
+  </div>
+</div>
+
+<div class="foot-wrap">
+  <div class="wrap">
+    <div class="foot">by Digital Stoic · MIT · <a href="https://github.com/digital-stoic-org/stint">Source on GitHub</a></div>
+    <p class="legal">Not affiliated with or endorsed by Anthropic. Claude and Claude Code are trademarks of Anthropic.</p>
+  </div>
+</div>
+
+<script>
+(function(){
+  var nav=document.querySelector('.topnav'); if(!nav) return;
+  var btn=nav.querySelector('.menu-toggle');
+  nav.classList.add('js');
+  function set(o){ nav.classList.toggle('open',o); btn.setAttribute('aria-expanded',o?'true':'false'); }
+  btn.addEventListener('click',function(){ set(!nav.classList.contains('open')); });
+  nav.addEventListener('click',function(e){ if(e.target.closest('a[href]')) set(false); });
+  document.addEventListener('keydown',function(e){ if(e.key==='Escape') set(false); });
+  window.addEventListener('resize',function(){ if(window.innerWidth>=600) set(false); });
+})();
+</script>
+<script>
+
+(function () {
+const PRICE_URL = 'https://platform.claude.com/docs/en/about-claude/pricing';
+const EFFORT_URL = 'https://platform.claude.com/docs/en/build-with-claude/effort';
+
+// USD per MTok, prices as of 2026-10-28: input / 5m cache write / cache read / output
+const MODELS = {
+  fable:  { name: 'Fable 5.1',  def: 'high',   tiers: [{ in: 10, cw: 12.5, cr: 0.25, out: 50 }] },
+  opus:   { name: 'Opus 5.5',   def: 'medium', tiers: [{ in: 4, cw: 5, cr: 0.20, out: 20 }] },
+  sonnet: { name: 'Sonnet 5.5', def: 'high',   tiers: [{ in: 2, cw: 2.5, cr: 0.10, out: 10 }] },
+  haiku:  { name: 'Haiku 5.5',  def: 'medium', tiers: [{ upTo: 100000, in: 0.10, cw: 0.125, cr: 0.01, out: 0.50 }, { in: 0.50, cw: 0.625, cr: 0.05, out: 2.50 }] }
+};
+// Output multiplier per effort level, from Opus 5.5 cost per task (SWE-bench Pro subset). max = placeholder.
+const EFFORT = { low: 0.52, medium: 1.00, high: 1.38, xhigh: 3.52, max: 5.0 };
+const WINDOWS = [120000, 200000, 500000, 1000000];
+
+const PRESETS = [
+  { a: { model: 'opus', effort: 'medium', win: 1e6, laps: 300, cache: true },
+    b: { model: 'sonnet', effort: 'high', win: 120000, laps: 300, cache: true } },
+  { a: { model: 'opus', effort: 'medium', win: 1e6, laps: 300, cache: true },
+    b: { model: 'opus', effort: 'medium', win: 120000, laps: 300, cache: true } },
+  { a: { model: 'sonnet', effort: 'high', win: 200000, laps: 150, cache: false },
+    b: { model: 'sonnet', effort: 'high', win: 200000, laps: 150, cache: true } }
+];
+
+const tier = (m, prompt) => m.tiers.find(t => !t.upTo || prompt <= t.upTo);
+
+function simulate(d, A) {
+  const m = MODELS[d.model];
+  const outTok = Math.round(A.out * EFFORT[d.effort] / EFFORT[m.def]);
+  const cap = d.win * A.cap;
+  let ctx = A.seed, cached = 0, cost = 0, pits = 0, peak = 0;
+  const ctxPts = [A.seed], costPts = [0], pitLaps = [];
+  for (let i = 1; i <= d.laps; i++) {
+    if (ctx > A.seed && ctx + A.add > cap) {          // pit: read the context, write the handoff
+      const p = tier(m, ctx), rd = d.cache ? Math.min(cached, ctx) : 0;
+      cost += (d.cache ? rd * p.cr + (ctx - rd) * p.cw : ctx * p.in) / 1e6 + A.seed * p.out / 1e6;
+      ctx = A.seed; cached = 0; pits++; pitLaps.push(i - 1);
+    }
+    const req = ctx + A.add, p = tier(m, req);
+    if (d.cache) { const rd = Math.min(cached, req); cost += (rd * p.cr + (req - rd) * p.cw) / 1e6; cached = req; }
+    else cost += req * p.in / 1e6;
+    cost += outTok * p.out / 1e6;
+    ctx = req + outTok; peak = Math.max(peak, req);
+    ctxPts.push(req); costPts.push(cost);
+  }
+  return { ctxPts, costPts, cost, pits, stints: pits + 1, peak, outTok, cap, pitLaps };
+}
+
+const $ = id => document.getElementById(id);
+const svg = $('svg'), root = $('f2');
+const k = v => v >= 1e6 ? +(v / 1e6).toFixed(2) + 'M' : +(v / 1e3).toFixed(v < 1e5 ? 1 : 0) + 'k';
+const int = v => Math.round(v).toLocaleString('en-US');
+const usd = v => '$' + v.toLocaleString('en-US', { minimumFractionDigits: v >= 1000 ? 0 : 2, maximumFractionDigits: v >= 1000 ? 0 : 2 });
+const rate = v => '$' + (Number.isInteger(v) ? v : v.toFixed(Math.max(2, (String(v).split('.')[1] || '').length)));
+const link = (url, txt) => `<a href="${url}" target="_blank" rel="noopener">${txt}</a>`;
+
+function priceText(m) {
+  const t = m.tiers, q = x => `${rate(x.in)} / ${rate(x.cw)} / ${rate(x.cr)} / ${rate(x.out)}`;
+  const body = t.length > 1
+    ? `prompts &le;100k: ${q(t[0])} · over 100k: ${q(t[1])} (input / cache write / cache read / output per MTok)`
+    : `${rate(t[0].in)} input · ${rate(t[0].cw)} cache write · ${rate(t[0].cr)} cache read · ${rate(t[0].out)} output per MTok`;
+  return `${body} · ${link(PRICE_URL, 'prices as of 2026-10-28')}`;
+}
+
+function card(s) {
+  const S = s.toUpperCase();
+  const radios = (name, vals, lab) => vals.map(v => `<input type="radio" name="${name}-${s}" id="${name}-${s}-${v}" value="${v}"><label for="${name}-${s}-${v}">${lab(v)}</label>`).join('');
+  return `<div class="drv drv-${s}" role="group" aria-labelledby="t-${s}">
+    <h3 id="t-${s}">Driver ${S}</h3>
+    <div class="row"><label class="lbl" for="model-${s}">Model</label>
+      <select id="model-${s}">${Object.keys(MODELS).map(id => `<option value="${id}">Claude ${MODELS[id].name}</option>`).join('')}</select>
+      <p class="price" id="price-${s}"></p></div>
+    <fieldset class="row"><legend>Effort ${link(EFFORT_URL, 'docs')}</legend>
+      <div class="seg">${radios('eff', Object.keys(EFFORT), v => v)}</div>
+      <p class="hint" id="hint-${s}"></p></fieldset>
+    <fieldset class="row"><legend>Context window</legend>
+      <div class="seg">${radios('win', WINDOWS, k)}</div></fieldset>
+    <div class="row"><label class="lbl" for="laps-${s}">Laps</label>
+      <div class="laps"><input type="range" id="laps-${s}" min="10" max="600" step="10"><output id="lo-${s}" for="laps-${s}"></output></div></div>
+    <div class="row"><label class="sw"><input type="checkbox" id="cache-${s}" checked> Cached input (prompt caching)</label></div>
+    <dl class="res">
+      <div><dt>Stints, deduced</dt><dd><span id="st-${s}"></span><span class="sub" id="sts-${s}"></span></dd></div>
+      <div><dt>Total bill</dt><dd><span id="tot-${s}"></span><span class="sub" id="tots-${s}"></span></dd></div>
+    </dl>
+  </div>`;
+}
+$('drivers').innerHTML = card('a') + card('b');
+
+const pick = (name, v) => { const el = $(`${name}-${v}`); if (el) el.checked = true; };
+function setDriver(s, d) {
+  $('model-' + s).value = d.model;
+  pick('eff-' + s, d.effort);
+  pick('win-' + s, d.win);
+  $('laps-' + s).value = d.laps;
+  $('cache-' + s).checked = d.cache;
+}
+function getDriver(s) {
+  const g = n => root.querySelector(`input[name=${n}-${s}]:checked`).value;
+  return { model: $('model-' + s).value, effort: g('eff'), win: +g('win'), laps: +$('laps-' + s).value, cache: $('cache-' + s).checked };
+}
+function readAssume() {
+  const num = (id, d, lo, hi) => { const v = parseFloat($(id).value); return isFinite(v) ? Math.min(hi, Math.max(lo, v)) : d; };
+  return { add: num('as-add', 3000, 0, 50000), out: num('as-out', 1500, 0, 50000), seed: num('as-seed', 5000, 0, 100000), cap: num('as-cap', 83, 50, 95) / 100 };
+}
+
+function niceStep(max, n) {
+  const raw = max / n, p = Math.pow(10, Math.floor(Math.log10(raw))), f = raw / p;
+  return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * p;
+}
+
+let lastHero = '', liveTimer = 0;
+
+function draw() {
+  const A = readAssume(), a = getDriver('a'), b = getDriver('b');
+  const ra = simulate(a, A), rb = simulate(b, A);
+  const cost = root.querySelector('input[name=view]:checked').value === 'cost';
+  const sa = cost ? ra.costPts : ra.ctxPts, sb = cost ? rb.costPts : rb.ctxPts;
+
+  // chart
+  const W = Math.max(300, Math.round(svg.parentNode.clientWidth - 12)), narrow = W < 520;
+  const H = narrow ? 300 : 380;
+  const m = { l: 54, r: narrow ? 30 : 112, t: 16, b: 38 };
+  const pw = W - m.l - m.r, ph = H - m.t - m.b;
+  const maxL = Math.max(a.laps, b.laps);
+  const top = Math.max(...sa, ...sb) || 1;
+  const stepY = niceStep(top, 5), ymax = Math.ceil(top * 1.04 / stepY) * stepY;
+  const X = i => m.l + (i / maxL) * pw;
+  const Y = v => m.t + ph - (v / ymax) * ph;
+  const yTick = v => !v ? '0' : cost ? (stepY < 1 ? '$' + v.toFixed(2) : stepY % 1 ? '$' + v.toFixed(1) : '$' + int(v)) : k(v);
+  let s = '';
+  for (let j = 0; j * stepY <= ymax + 1e-9; j++) {
+    const v = j * stepY;
+    s += `<line class="grid" x1="${m.l}" x2="${m.l + pw}" y1="${Y(v)}" y2="${Y(v)}"/><text class="tick" x="${m.l - 6}" y="${Y(v) + 3.5}" text-anchor="end">${yTick(v)}</text>`;
+  }
+  const stepX = Math.max(1, niceStep(maxL, narrow ? 4 : 6));
+  for (let i = 0; i <= maxL; i += stepX) s += `<text class="tick" x="${X(i)}" y="${m.t + ph + 16}" text-anchor="middle">${i}</text>`;
+  s += `<line class="axis" x1="${m.l}" x2="${m.l}" y1="${m.t}" y2="${m.t + ph}"/><line class="axis" x1="${m.l}" x2="${m.l + pw}" y1="${m.t + ph}" y2="${m.t + ph}"/>`;
+  s += `<text class="axtitle" x="${m.l + pw / 2}" y="${H - 6}" text-anchor="middle">laps</text>`;
+  s += `<text class="axtitle" x="12" y="${m.t + ph / 2}" text-anchor="middle" transform="rotate(-90 12 ${m.t + ph / 2})">${cost ? 'cumulative cost, USD' : 'tokens per call'}</text>`;
+  if (!cost) {
+    const caps = ra.cap === rb.cap ? [['b', ra.cap, 'A and B pit']] : [['a', ra.cap, 'A pits'], ['b', rb.cap, 'B pits']];
+    caps.forEach(([c, v, lab]) => {
+      if (v > ymax) return;
+      s += `<line class="cap-${c}" x1="${m.l}" x2="${m.l + pw}" y1="${Y(v)}" y2="${Y(v)}"/><text class="caplab" x="${m.l + 6}" y="${Y(v) - 4}">${lab} at ${k(v)}</text>`;
+    });
+  }
+  const path = pts => 'M' + pts.map((v, i) => `${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join('L');
+  s += `<path class="s-a" d="${path(sa)}"/><path class="s-b" d="${path(sb)}"/>`;
+  if (cost) [[ra, sa], [rb, sb]].forEach(([r, pts]) => r.pitLaps.forEach(i => { s += `<circle class="pit" cx="${X(i).toFixed(1)}" cy="${Y(pts[i]).toFixed(1)}" r="3"/>`; }));
+  let ya = Y(sa.at(-1)), yb = Y(sb.at(-1));
+  const xa = X(a.laps), xb = X(b.laps);
+  if (xa === xb && Math.abs(ya - yb) < 14) { const mid = (ya + yb) / 2, up = ya <= yb ? 1 : -1; ya = mid - 7 * up; yb = mid + 7 * up; }
+  s += `<text class="lab lab-a" x="${xa + 6}" y="${ya + 4}">${narrow ? 'A' : 'A · ' + MODELS[a.model].name}</text>`;
+  s += `<text class="lab lab-b" x="${xb + 6}" y="${yb + 4}">${narrow ? 'B' : 'B · ' + MODELS[b.model].name}</text>`;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.setAttribute('height', H);
+  svg.innerHTML = s;
+  const endA = cost ? usd(ra.cost) : k(sa.at(-1)) + ' tokens', endB = cost ? usd(rb.cost) : k(sb.at(-1)) + ' tokens';
+  svg.setAttribute('aria-label', `${cost ? 'Cumulative cost' : 'Context size per call'} over laps. Driver A ends at ${endA} after ${ra.stints} stint${ra.stints > 1 ? 's' : ''}; driver B ends at ${endB} after ${rb.stints} stint${rb.stints > 1 ? 's' : ''}.`);
+  $('key-pit').hidden = !cost;
+
+  // driver cards
+  [['a', a, ra], ['b', b, rb]].forEach(([s, d, r]) => {
+    const mo = MODELS[d.model], mult = EFFORT[d.effort] / EFFORT[mo.def];
+    $('price-' + s).innerHTML = priceText(mo);
+    $('hint-' + s).textContent = `x${mult.toFixed(2)} vs ${mo.name} default (${mo.def}) · ${int(r.outTok)} output tokens per lap` + (d.effort === 'max' ? ' · max is a placeholder, no published data' : '');
+    $('lo-' + s).textContent = d.laps;
+    $('st-' + s).textContent = r.stints;
+    $('sts-' + s).textContent = (r.pits ? `${r.pits} pit stop${r.pits > 1 ? 's' : ''}` : 'no pit needed') + ` · pits at ${k(r.cap)} (${Math.round(A.cap * 100)}% of ${k(d.win)})`;
+    $('tot-' + s).textContent = usd(r.cost);
+    $('tots-' + s).textContent = `peak ${k(r.peak)} tokens per call · ${usd(r.cost / d.laps)} per lap`;
+  });
+
+  // verdict
+  const hi = Math.max(ra.cost, rb.cost), lo = Math.min(ra.cost, rb.cost), ratio = lo > 0 ? hi / lo : 1;
+  const win = rb.cost < ra.cost ? 'B' : 'A';
+  const same = ratio < 1.05;
+  const x = same ? 'about the same bill' : `${ratio < 10 ? ratio.toFixed(1) : Math.round(ratio)} times cheaper with ${win}`;
+  const lapsTxt = a.laps === b.laps ? `Same ${a.laps} laps:` : `${a.laps} vs ${b.laps} laps:`;
+  const hero = `${lapsTxt} <span class="va">${usd(ra.cost)}</span> vs <span class="vb">${usd(rb.cost)}</span>, <span class="x">${x}</span>`;
+  const heroEl = $('hero');
+  if (hero !== lastHero) {
+    heroEl.innerHTML = hero;
+    heroEl.classList.remove('flash'); void heroEl.offsetWidth; heroEl.classList.add('flash');
+    lastHero = hero;
+  }
+  const pitsTxt = r => r.pits === 0 ? 'never pits' : r.pits === 1 ? 'pits once' : `pits ${r.pits} times`;
+  const desc = (S, d, r) => `${S} (${MODELS[d.model].name}, ${k(d.win)} window) ${pitsTxt(r)} and carries up to ${k(r.peak)} tokens into a call`;
+  $('sent').textContent = `${desc('A', a, ra)}; ${desc('B', b, rb)}. Every call re-reads the whole context, so the bill follows the area under the context curve` +
+    (a.cache !== b.cache ? ', and cached input bills that context at a small fraction of the input price.' : '.');
+  $('diff').textContent = same ? `Difference: ${usd(hi - lo)}.` : `Difference: ${usd(hi - lo)}, ${Math.round((1 - lo / hi) * 100)}% less with driver ${win}.`;
+  $('assume').innerHTML = `Assumes +${int(A.add)} new input and ${int(A.out)} output tokens per lap at default effort, output appended to the context; pit at ${Math.round(A.cap * 100)}% of the window; ${k(A.seed)} handoff seed. List API prices, ${link(PRICE_URL, 'prices as of 2026-10-28')}.`;
+
+  clearTimeout(liveTimer);
+  liveTimer = setTimeout(() => { $('live').textContent = `Driver A ${usd(ra.cost)}, driver B ${usd(rb.cost)}: ${x}.`; }, 600);
+}
+
+function applyPreset(i) {
+  setDriver('a', PRESETS[i].a); setDriver('b', PRESETS[i].b);
+  root.querySelectorAll('.pre').forEach(btn => btn.setAttribute('aria-pressed', btn.dataset.p === String(i) ? 'true' : 'false'));
+  draw();
+}
+
+root.addEventListener('click', e => { const btn = e.target.closest('.pre'); if (btn) applyPreset(+btn.dataset.p); });
+root.addEventListener('input', e => {
+  const t = e.target;
+  if (t.closest('.drivers')) {
+    root.querySelectorAll('.pre').forEach(btn => btn.setAttribute('aria-pressed', 'false'));
+    const mm = /^model-(a|b)$/.exec(t.id);
+    if (mm) pick('eff-' + mm[1], MODELS[t.value].def);   // a new car starts at its default effort
+  }
+  draw();
+});
+
+setDriver('a', PRESETS[0].a); setDriver('b', PRESETS[0].b);
+new ResizeObserver(draw).observe(svg.parentNode);
+draw();
+})();
+</script>
+<script>
+(function(){
+  var strip=document.querySelector('.legend-strip'); if(!strip) return;
+  var pop=document.getElementById('legend-pop');
+  var chips=strip.querySelectorAll('.legend-chip');
+  var timer=null, cur=null;
+  function place(btn){
+    var sw=strip.clientWidth, pw=pop.offsetWidth;
+    var left=Math.max(0,Math.min(btn.offsetLeft,sw-pw));
+    pop.style.left=left+'px';
+    pop.style.top=(btn.offsetTop+btn.offsetHeight+6)+'px';
+  }
+  function open(btn){
+    if(cur===btn) return;
+    cur=btn;
+    chips.forEach(function(c){c.setAttribute('aria-pressed',c===btn?'true':'false');});
+    pop.textContent=document.getElementById(btn.getAttribute('aria-describedby')).textContent;
+    place(btn);
+    pop.classList.add('open');
+  }
+  function close(){
+    clearTimeout(timer); cur=null;
+    pop.classList.remove('open');
+    chips.forEach(function(c){c.setAttribute('aria-pressed','false');});
+  }
+  chips.forEach(function(btn){
+    btn.addEventListener('mouseenter',function(){clearTimeout(timer);timer=setTimeout(function(){open(btn);},150);});
+    btn.addEventListener('mouseleave',close);
+    btn.addEventListener('focus',function(){open(btn);});
+    btn.addEventListener('blur',close);
+    btn.addEventListener('click',function(){open(btn);});
+  });
+  document.addEventListener('keydown',function(e){if(e.key==='Escape') close();});
+  document.addEventListener('pointerdown',function(e){if(!e.target.closest||!e.target.closest('.legend-chip')) close();});
+  window.addEventListener('resize',close);
+})();
+</script>
+</section>
+</body>
+</html>
