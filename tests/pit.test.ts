@@ -4,11 +4,18 @@ import type { On } from 'claude-code'
 import {
   AGENT_LINE,
   AGENTS_UNKNOWN,
+  AUTOPIT_KEY,
+  AUTOPIT_MAX_AGE_MS,
+  AUTOPIT_MIN_TOKENS,
   NOTES_MAX,
   SLOW_MS,
   UNPACK_RULES,
   WALL_CAP,
   agentLinesOf,
+  autoLine,
+  autoUnpackRules,
+  autopitDelayMs,
+  autopitSkip,
   boardProgress,
   hintBoard,
   savedBoard,
@@ -16,6 +23,7 @@ import {
   elapsed,
   forkPrompt,
   hintText,
+  injectText,
   notesPath,
   overWall,
   parseArgs,
@@ -340,6 +348,9 @@ type World = {
   agents: { id: string; name?: string; description: string; type: string; status: string }[]
   refuseClear: boolean
   failWrites: boolean
+  // auto-pit: the Auto-pit row's value and the text in the prompt box
+  mode: string
+  draft: string | null
   cwd?: string
   root?: string
 }
@@ -360,6 +371,8 @@ function world(on: On, forkText: string | null, now = 1_000_000): World {
     agents: [],
     refuseClear: false,
     failWrites: false,
+    mode: 'on',
+    draft: '',
   }
   on('store.get', (_$, e) => ({ value: w.store.get(e.key) }))
   on('store.set', (_$, e) => (w.store.set(e.key, e.value), { value: undefined }))
@@ -398,6 +411,13 @@ function world(on: On, forkText: string | null, now = 1_000_000): World {
   })
   on('session.measure', (_$, e) => ({ changed: [...e.changed] }))
   on('turn.start', (_$, e) => ({ turnId: e.turnId }))
+  on('turn.complete', (_$, e) => ({ text: e.answer }))
+  on('config.list', () => ({ value: [{ key: AUTOPIT_KEY, label: 'stint · Auto-pit', kind: 'choice', value: w.mode, provider: { plugin: 'stint', tier: 'plugin' }, isLocked: false }] }) as never)
+  on('config.set', { key: AUTOPIT_KEY }, (_$, e) => ({ value: e.value }))
+  on('prompt.read', () => {
+    if (w.draft === null) throw new Error('prompt box down')
+    return { value: { text: w.draft, cursor: w.draft.length } } as never
+  })
   on('ui.status', (_$, e) => (w.statuses.push(e.text), { value: undefined }))
   on('ui.toast', (_$, e) => (w.toasts.push(e.text), { value: undefined }))
   on('ui.log', () => ({ value: undefined }))
@@ -916,4 +936,231 @@ test('root: no root from the host falls back to the cwd', async ($, on) => {
   await fresh($)
   await pit($)
   expect(w.files.has(`${SUB}/.stint/proj-notes.md`)).toBe(true)
+})
+
+// ---------- auto-pit (idle trigger) ----------
+
+test('autopitDelayMs: on = 50 min, on-55m, on-40m, off = null, an unknown value reads as the default', () => {
+  expect(autopitDelayMs('on')).toBe(50 * 60_000)
+  expect(autopitDelayMs('on-55m')).toBe(55 * 60_000)
+  expect(autopitDelayMs('on-40m')).toBe(40 * 60_000)
+  expect(autopitDelayMs('off')).toBeNull()
+  expect(autopitDelayMs('on-60m')).toBe(50 * 60_000)
+  expect(autopitDelayMs(undefined)).toBe(50 * 60_000)
+})
+
+const GATE = { mode: 'on', saving: false, turnRunning: false, sinceMs: 50 * 60_000, tokens: 90_000, draft: '', busyAgents: 0 }
+
+test('autopitSkip: every guard names its reason; all clear = null; an unreadable figure skips', () => {
+  expect(autopitSkip(GATE)).toBeNull()
+  expect(autopitSkip({ ...GATE, mode: 'off' })).toBe('setting is off')
+  expect(autopitSkip({ ...GATE, saving: true })).toBe('a pit is already running')
+  expect(autopitSkip({ ...GATE, turnRunning: true })).toBe('a turn is running')
+  expect(autopitSkip({ ...GATE, sinceMs: AUTOPIT_MAX_AGE_MS })).toBeNull()
+  expect(autopitSkip({ ...GATE, sinceMs: AUTOPIT_MAX_AGE_MS + 1 })).toBe('the prompt cache is probably expired')
+  expect(autopitSkip({ ...GATE, sinceMs: null })).toBe('the prompt cache is probably expired')
+  expect(autopitSkip({ ...GATE, tokens: AUTOPIT_MIN_TOKENS })).toBeNull()
+  expect(autopitSkip({ ...GATE, tokens: AUTOPIT_MIN_TOKENS - 1 })).toBe('context below the threshold')
+  expect(autopitSkip({ ...GATE, tokens: null })).toBe('context size unknown')
+  expect(autopitSkip({ ...GATE, draft: 'half a sent' })).toBe('a draft is in the prompt box')
+  expect(autopitSkip({ ...GATE, draft: '  \n' })).toBeNull()
+  expect(autopitSkip({ ...GATE, draft: null })).toBe('prompt box unreadable')
+  expect(autopitSkip({ ...GATE, busyAgents: 1 })).toBe('agents are running')
+  expect(autopitSkip({ ...GATE, busyAgents: null })).toBe('agents unknown')
+})
+
+test('autoLine and injectText: the auto variant carries the line and the wait rules, the manual text is unchanged', () => {
+  const at = new Date(2026, 9, 29, 14, 5).getTime()
+  const line = autoLine({ at, idleMin: 50, tokens: 91_400 }, '.stint/proj-notes.md')
+  expect(line).toBe('⏸ auto-pit at 14:05 · 50 min idle · 91k → notes .stint/proj-notes.md')
+  expect(injectText('notes\n')).toBe(`notes\n\n${UNPACK_RULES}`)
+  const auto = injectText('notes\n', line)
+  expect(auto).toBe(`notes\n\n${autoUnpackRules(line)}`)
+  expect(auto).toContain(`exactly this, with nothing before it:\n${line}`)
+  expect(auto).toContain('do not resume the task')
+  expect(auto).not.toContain(UNPACK_RULES)
+})
+
+const IDLE_MS = 50 * 60_000
+const BIG = { tokens: 90_000, wall: 200_000 }
+const turnDone = ($: Engine, extra: Record<string, unknown> = {}) => $.turn.complete({ answer: 'x', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', ...extra } as never)
+const typed = ($: Engine) => $.classic.UserPromptSubmit({ prompt: 'x' })
+const setAutopit = ($: Engine, value: string) => $.config.set({ key: AUTOPIT_KEY, value, previous: 'on', provider: { plugin: 'stint', tier: 'plugin' }, origin: { kind: 'composer' } } as never)
+
+// A started session on stream "proj", one turn done, the context big.
+async function idleWorld($: Engine, on: On) {
+  const w = world(on, OK())
+  w.usage = BIG
+  await fresh($)
+  await title($, 'proj')
+  await turnDone($)
+  return w
+}
+
+test('auto-pit: 50 min idle with a big context saves, clears, and the fresh session opens with the auto line and the wait rules', async ($, on) => {
+  const w = await idleWorld($, on)
+  await w.clock.advance(IDLE_MS - 1)
+  expect(w.forkPrompts).toHaveLength(0)
+  await w.clock.advance(1)
+  expect(w.forkPrompts).toHaveLength(1)
+  const notes = w.files.get(NOTES) ?? ''
+  expect(notes).toContain('stream: proj')
+  expect(w.store.get('stint:pending')).toMatchObject({ stream: 'proj', auto: { idleMin: 50, tokens: 90_000 } })
+  await w.clock.advance(5)
+  expect(w.clears).toBe(1)
+  await clear($)
+  const line = autoLine({ at: 1_000_000 + IDLE_MS, idleMin: 50, tokens: 90_000 }, '.stint/proj-notes.md')
+  expect(w.submits).toEqual([`${notes.trimEnd()}\n\n${autoUnpackRules(line)}`])
+  expect(w.store.get('stint:pending')).toBeUndefined()
+})
+
+test('auto-pit: a prompt before the fire cancels it; the next turn end arms a fresh wait', async ($, on) => {
+  const w = await idleWorld($, on)
+  await w.clock.advance(IDLE_MS - 60_000)
+  await typed($)
+  await w.clock.advance(30 * 60_000)
+  expect(w.forkPrompts).toHaveLength(0)
+  await turnDone($)
+  await w.clock.advance(IDLE_MS)
+  expect(w.forkPrompts).toHaveLength(1)
+})
+
+test('auto-pit: a subagent turn end does not arm or re-arm; only the main loop does', async ($, on) => {
+  const w = world(on, OK())
+  w.usage = BIG
+  await fresh($)
+  await turnDone($, { agentId: 'a1' })
+  await w.clock.advance(IDLE_MS + 1)
+  expect(w.forkPrompts).toHaveLength(0)
+  await turnDone($)
+  await w.clock.advance(IDLE_MS - 1_000)
+  await turnDone($, { agentId: 'a1' })
+  await w.clock.advance(1_000)
+  expect(w.forkPrompts).toHaveLength(1)
+})
+
+test('auto-pit: skipped, never postponed, when the context is under 80k, a draft is typed, or an agent is running', async ($, on) => {
+  const w = await idleWorld($, on)
+  w.usage = { tokens: AUTOPIT_MIN_TOKENS - 1, wall: 200_000 }
+  await w.clock.advance(IDLE_MS)
+  expect(w.forkPrompts).toHaveLength(0)
+
+  w.usage = BIG
+  w.draft = 'a half-written question'
+  await turnDone($)
+  await w.clock.advance(IDLE_MS)
+  expect(w.forkPrompts).toHaveLength(0)
+  // not postponed: nothing fires later either, and the draft is untouched
+  await w.clock.advance(IDLE_MS)
+  expect(w.forkPrompts).toHaveLength(0)
+  expect(w.clears).toBe(0)
+
+  w.draft = null
+  await turnDone($)
+  await w.clock.advance(IDLE_MS)
+  expect(w.forkPrompts).toHaveLength(0)
+
+  w.draft = ''
+  w.agents = [{ id: 'a9', name: 'builder', description: 'writing', type: 'general-purpose', status: 'running' }]
+  await turnDone($)
+  await w.clock.advance(IDLE_MS)
+  expect(w.forkPrompts).toHaveLength(0)
+
+  // an idle teammate is not work in progress: it goes in the notes and the pit runs
+  w.agents = [{ id: 'a9', name: 'builder', description: 'writing', type: 'general-purpose', status: 'idle' }]
+  await turnDone($)
+  await w.clock.advance(IDLE_MS)
+  expect(w.forkPrompts).toHaveLength(1)
+  expect(w.files.get(NOTES)).toContain('agent in flight: builder [a9] idle')
+})
+
+test('auto-pit: off never arms; the setting is followed live (on counts from the last turn, off cancels, on-40m shortens the wait)', async ($, on) => {
+  const w = world(on, OK())
+  w.usage = BIG
+  w.mode = 'off'
+  await fresh($)
+  await title($, 'proj')
+  await turnDone($)
+  await w.clock.advance(10 * 60_000)
+  expect(w.forkPrompts).toHaveLength(0)
+
+  // 10 min already spent: the 50 min wait ends 40 min from now
+  await setAutopit($, 'on')
+  await w.clock.advance(40 * 60_000 - 1)
+  expect(w.forkPrompts).toHaveLength(0)
+  await w.clock.advance(1)
+  expect(w.forkPrompts).toHaveLength(1)
+  await clear($)
+  await w.clock.advance(5)
+
+  // a second period: off before the fire cancels it
+  await turnDone($)
+  await w.clock.advance(10 * 60_000)
+  await setAutopit($, 'off')
+  await w.clock.advance(IDLE_MS)
+  expect(w.forkPrompts).toHaveLength(1)
+
+  // a third: 10 min spent, on-40m ends 30 min from now
+  await turnDone($)
+  await w.clock.advance(10 * 60_000)
+  await setAutopit($, 'on-40m')
+  await w.clock.advance(30 * 60_000 - 1)
+  expect(w.forkPrompts).toHaveLength(1)
+  await w.clock.advance(1)
+  expect(w.forkPrompts).toHaveLength(2)
+})
+
+test('auto-pit: the ready turn of an auto-pit does not arm a second one; the turn after it does', async ($, on) => {
+  const w = await idleWorld($, on)
+  await w.clock.advance(IDLE_MS + 5)
+  await clear($)
+  expect(w.submits).toHaveLength(1)
+  // the ready turn
+  await typed($)
+  await turnDone($)
+  await w.clock.advance(IDLE_MS * 2)
+  expect(w.forkPrompts).toHaveLength(1)
+  // the user answers: that turn arms as usual
+  await typed($)
+  await turnDone($)
+  await w.clock.advance(IDLE_MS)
+  expect(w.forkPrompts).toHaveLength(2)
+})
+
+test('auto-pit: the user comes back while the fork runs: nothing is cleared, nothing pending, the notes file stays', async ($, on) => {
+  const w = await idleWorld($, on)
+  let release: () => void = () => undefined
+  w.gate = new Promise<void>(resolve => (release = resolve))
+  await w.clock.advance(IDLE_MS)
+  expect(w.forkPrompts).toHaveLength(1)
+  await typed($)
+  release()
+  await w.clock.advance(5)
+  expect(w.clears).toBe(0)
+  expect(w.store.get('stint:pending')).toBeUndefined()
+  await clear($)
+  expect(w.submits).toHaveLength(0)
+})
+
+test('auto-pit: a failed save (fork blocked) leaves the session as it is and shows the failure', async ($, on) => {
+  const w = await idleWorld($, on)
+  w.forkText = 'GATE: blocked - mid synthesis'
+  await w.clock.advance(IDLE_MS + 5)
+  expect(w.clears).toBe(0)
+  expect(w.files.has(NOTES)).toBe(false)
+  expect(w.toasts.some(t => t.includes('failed'))).toBe(true)
+})
+
+test('auto-pit: /clear and a new session reset the idle clock; the manual /pit is untouched by the setting', async ($, on) => {
+  const w = await idleWorld($, on)
+  await clear($)
+  await w.clock.advance(IDLE_MS * 2)
+  expect(w.forkPrompts).toHaveLength(0)
+  w.mode = 'off'
+  const out = await pit($)
+  expect(out.text).toBe('pit: saved .stint/proj-notes.md')
+  await w.clock.advance(5)
+  expect(w.clears).toBe(1)
+  await clear($)
+  expect(w.submits).toEqual([injectText(w.files.get(NOTES) ?? '')])
 })

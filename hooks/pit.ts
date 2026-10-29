@@ -123,6 +123,60 @@ export function overWall(tokens: number, wall: number): boolean {
   return wall > 0 && tokens >= WALL_CAP * wall
 }
 
+// ---------- auto-pit: pure parts ----------
+
+// The setting row `stint.autopit` (plugin.json userConfig). An unknown value reads as the default.
+export const AUTOPIT_KEY = 'stint.autopit'
+export const AUTOPIT_DEFAULT = 'on'
+const AUTOPIT_DELAY_MIN: Record<string, number> = { on: 50, 'on-55m': 55, 'on-40m': 40 }
+// Absolute tokens: a window of 1M makes a percent meaningless here.
+export const AUTOPIT_MIN_TOKENS = 80_000
+// The main conversation's cache lives 1 h from its last request; a fire later than this (machine asleep) finds it dead.
+export const AUTOPIT_MAX_AGE_MS = 58 * 60 * 1000
+
+// null = off; else the idle wait before the pit, in ms.
+export function autopitDelayMs(mode: unknown): number | null {
+  if (mode === 'off') return null
+  const min = typeof mode === 'string' ? AUTOPIT_DELAY_MIN[mode] : undefined
+  return (min ?? (AUTOPIT_DELAY_MIN[AUTOPIT_DEFAULT] as number)) * 60_000
+}
+
+// What the fire reads before it pits; null = could not be read (that skips: an unverified guard is a failed guard).
+export type AutopitGate = {
+  mode: unknown
+  saving: boolean
+  turnRunning: boolean
+  // ms since the last main-loop turn.complete; null = none seen since the last /clear or start
+  sinceMs: number | null
+  tokens: number | null
+  draft: string | null
+  // agents running, pending or waiting (an idle teammate survives the /clear and is written in the notes)
+  busyAgents: number | null
+}
+
+// The reason to skip, or null when every guard holds. Order = cheapest first.
+export function autopitSkip(g: AutopitGate): string | null {
+  if (autopitDelayMs(g.mode) === null) return 'setting is off'
+  if (g.saving) return 'a pit is already running'
+  if (g.turnRunning) return 'a turn is running'
+  if (g.sinceMs === null || g.sinceMs > AUTOPIT_MAX_AGE_MS) return 'the prompt cache is probably expired'
+  if (g.tokens === null) return 'context size unknown'
+  if (g.tokens < AUTOPIT_MIN_TOKENS) return 'context below the threshold'
+  if (g.draft === null) return 'prompt box unreadable'
+  if (g.draft.trim() !== '') return 'a draft is in the prompt box'
+  if (g.busyAgents === null) return 'agents unknown'
+  if (g.busyAgents > 0) return 'agents are running'
+  return null
+}
+
+// What the fresh session shows for an auto-pit: when it fired, how long idle, how big the context was.
+export type AutoMark = { at: number; idleMin: number; tokens: number }
+
+export function autoLine(mark: AutoMark, path: string): string {
+  const d = new Date(mark.at)
+  return `⏸ auto-pit at ${pad(d.getHours())}:${pad(d.getMinutes())} · ${mark.idleMin} min idle · ${Math.round(mark.tokens / 1000)}k → notes ${path}`
+}
+
 export const elapsed = (ms: number) => {
   const s = Math.floor(ms / 1000)
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${pad(s % 60)}s`
@@ -353,8 +407,18 @@ export function forkPrompt(prev: string | null): string {
   return `${FORK_PROMPT}\n\n${budget}\n\nPREVIOUS NOTES:\n${prev ?? '(none)'}`
 }
 
-// The text injected as the first message: the notes, then the rules.
-export const injectText = (notes: string) => `${notes.trimEnd()}\n\n${UNPACK_RULES}`
+// Auto-pit only: the user was away and did not ask for this, so the first answer is the line below, a short summary, then silence.
+export const autoUnpackRules = (line: string) => `Your first line is exactly this, with nothing before it:
+${line}
+Then summarize the notes in 3 to 5 short lines: status, goal, what is in progress, the next action.
+Then stop and wait for me. The session was saved and cleared while I was away: do not resume the task.
+Do nothing without my explicit go — no file read, no command, no sub-agent.
+Write a message only when something changes. The rest of the time stay silent.
+Questions go to me, in this window.
+After my go, read the \`read_first\` files before acting.`
+
+// The text injected as the first message: the notes, then the rules (the auto-pit variant when `auto` is the line to show first).
+export const injectText = (notes: string, auto?: string) => `${notes.trimEnd()}\n\n${auto === undefined ? UNPACK_RULES : autoUnpackRules(auto)}`
 
 function forkFailure(reason: string): string {
   return reason === 'nothing-to-fork' ? 'nothing to save yet: this conversation has no response' : `fork failed (${reason})`
@@ -363,7 +427,7 @@ function forkFailure(reason: string): string {
 // ---------- module state (survives /clear, lost on mod reload; the pending injection is backed up in $.store) ----------
 
 // `sid`: the session of the pit, kept only while debug is on.
-type Pending = { text: string; createdAt: number; root: string; stream: string; sid?: string | undefined }
+type Pending = { text: string; createdAt: number; root: string; stream: string; sid?: string | undefined; auto?: AutoMark | undefined }
 
 let pending: Pending | null = null
 // A pit is running (the fork is slow): refuse a second one meanwhile.
@@ -380,6 +444,19 @@ let outcome: Line | undefined
 let hint: Line | undefined
 
 const current = () => resolveStream(boundArg, titleStream)
+
+// Auto-pit state. The mode is read from the /config row on first use and follows config.set; the rest is rebuilt by the next turn.complete.
+let autopitMode: string | null = null
+let autopitTimer: { cancel: () => void } | null = null
+// Bumped by every cancel, so an arm that was awaiting the mode when the user typed does not start a timer after it.
+let armGen = 0
+let lastTurnAt: number | null = null
+let turnRunning = false
+// The ready turn of an auto-pit must not arm the next one.
+let skipNextArm = false
+// An auto-pit is between its guards and its /clear: a prompt or a turn starting then aborts it.
+let autoRunning = false
+let autoAborted = false
 
 // pit's own lines (flow, outcome, hint) come first; with none, the dash line (status.ts).
 function paint($: EngineInterface) {
@@ -446,21 +523,34 @@ async function listStreams($: EngineInterface): Promise<string[]> {
   }
 }
 
-// $.agent.list() raced against AGENT_LIST_MS. Called BEFORE the fork starts, so the fork never lists itself. Never fails the pit.
-async function agentLines($: EngineInterface): Promise<string[]> {
+// $.agent.list() raced against AGENT_LIST_MS.
+async function listAgents($: EngineInterface): Promise<AgentLike[] | 'timeout' | 'error'> {
   let timer: { cancel: () => void } | null = null
   try {
     const timeout = new Promise<'timeout'>(resolve => {
       timer = $.clock.after(AGENT_LIST_MS, () => resolve('timeout'))
     })
-    const listed = await Promise.race([$.agent.list(), timeout])
-    if (listed === 'timeout') return [AGENTS_UNKNOWN]
-    return agentLinesOf(listed)
+    return await Promise.race([$.agent.list(), timeout])
   } catch {
-    return []
+    return 'error'
   } finally {
     ;(timer as { cancel: () => void } | null)?.cancel()
   }
+}
+
+// Called BEFORE the fork starts, so the fork never lists itself. Never fails the pit.
+async function agentLines($: EngineInterface): Promise<string[]> {
+  const listed = await listAgents($)
+  if (listed === 'timeout') return [AGENTS_UNKNOWN]
+  return listed === 'error' ? [] : agentLinesOf(listed)
+}
+
+const BUSY_STATUS = ['pending', 'running', 'waiting']
+
+// Agents (subagents, teammates) at work now; null when the list did not answer.
+async function busyAgents($: EngineInterface): Promise<number | null> {
+  const listed = await listAgents($)
+  return typeof listed === 'string' ? null : listed.filter(a => BUSY_STATUS.includes(a.status)).length
 }
 
 // ---------- save ----------
@@ -586,10 +676,10 @@ async function traceCommand($: EngineInterface) {
 // Injection = $.prompt.submit({ asUser: true }): it starts a turn, so UNPACK_RULES can hold the model at its acknowledgement line.
 // The host REFUSES prompt.submit called from inside the command.run hook, so /rejoin passes `defer` and the submit runs from a $.clock.after
 // dispatch, after the hook returned. SessionStart submits directly.
-function inject($: EngineInterface, stream: string, notes: string, defer: boolean) {
+function inject($: EngineInterface, stream: string, notes: string, defer: boolean, auto?: string) {
   const run = () => {
     trace($, 'inject.submit', { state: 'call', chars: notes.length }, stream)
-    $.prompt.submit({ text: injectText(notes), asUser: true }).then(
+    $.prompt.submit({ text: injectText(notes, auto), asUser: true }).then(
       () => trace($, 'inject.submit', { state: 'resolve' }, stream),
       err => {
         trace($, 'inject.submit', { state: 'reject', error: String(err) }, stream)
@@ -613,6 +703,73 @@ function backOnTrack($: EngineInterface, stint: number) {
   })
 }
 
+// ---------- auto-pit (idle trigger) ----------
+// Armed at the end of each main-loop turn, cancelled by the next prompt or turn. At the fire every guard of autopitSkip() is read; any miss skips (no postponing).
+// The pit itself is runPit(), unchanged. A timer callback is outside any command.run hook, so the host allows the fork, the /clear and the submit from it.
+
+function cancelAutopit() {
+  armGen++
+  autopitTimer?.cancel()
+  autopitTimer = null
+}
+
+async function modeNow($: EngineInterface): Promise<string> {
+  if (autopitMode !== null) return autopitMode
+  try {
+    const row = (await $.config.list()).find(r => r.key === AUTOPIT_KEY)
+    autopitMode = typeof row?.value === 'string' ? row.value : AUTOPIT_DEFAULT
+    return autopitMode
+  } catch {
+    return AUTOPIT_DEFAULT
+  }
+}
+
+// `spentMs`: idle time already behind us (a setting changed mid-wait).
+async function armAutopit($: EngineInterface, spentMs = 0) {
+  cancelAutopit()
+  const gen = armGen
+  const delay = autopitDelayMs(await modeNow($))
+  if (delay === null || gen !== armGen) return
+  autopitTimer = $.clock.after(Math.max(0, delay - spentMs), () => {
+    autopitTimer = null
+    void autoPit($)
+  })
+}
+
+async function autoPit($: EngineInterface) {
+  try {
+    const now = await $.clock.now()
+    const base = { mode: await modeNow($), saving, turnRunning, sinceMs: lastTurnAt === null ? null : now - lastTurnAt }
+    // The state guards first: nothing is read from the host when one of them already says no.
+    let why = autopitSkip({ ...base, tokens: AUTOPIT_MIN_TOKENS, draft: '', busyAgents: 0 })
+    let tokens: number | null = null
+    if (why === null) {
+      try {
+        tokens = (await $.session.usage()).context.tokens ?? null
+      } catch {
+        tokens = null
+      }
+      let draft: string | null = null
+      try {
+        draft = (await $.prompt.read()).text
+      } catch {
+        draft = null
+      }
+      const busy = tokens !== null && tokens >= AUTOPIT_MIN_TOKENS && draft === '' ? await busyAgents($) : 0
+      why = autopitSkip({ ...base, tokens, draft, busyAgents: busy })
+    }
+    if (why !== null || tokens === null || lastTurnAt === null) {
+      trace($, 'autopit.skip', { why })
+      return
+    }
+    trace($, 'autopit.fire', { tokens, idleMs: now - lastTurnAt })
+    await runPit($, undefined, { at: now, idleMin: Math.round((now - lastTurnAt) / 60_000), tokens })
+  } catch (err) {
+    autoRunning = false
+    $.ui.log(`stint: auto-pit failed: ${String(err)}`, { to: 'debug' })
+  }
+}
+
 // ---------- commands ----------
 
 async function pit($: EngineInterface, args: string) {
@@ -620,10 +777,14 @@ async function pit($: EngineInterface, args: string) {
   const parsed = parseArgs(args, 'pit')
   if ('error' in parsed) return { text: `pit: ${parsed.error}` }
   if (saving) return { text: `pit: a pit is already running, its outcome will show in the status line` }
+  return runPit($, parsed.stream)
+}
 
+// The pit proper, shared by /pit and the idle trigger (`auto`: the mark the fresh session shows).
+async function runPit($: EngineInterface, argStream: string | undefined, auto?: AutoMark) {
   const cwd = await rootNow($)
   const room = await headroom($)
-  trace($, 'pit.start', { cwd: await $.session.cwd(), root: cwd, headroom: room }, current())
+  trace($, 'pit.start', { cwd: await $.session.cwd(), root: cwd, headroom: room, ...(auto ? { auto: true } : {}) }, current())
   if (room && overWall(room.tokens, room.wall)) {
     const pct = Math.round((room.tokens / room.wall) * 100)
     const text = `pit: context is at ${pct}% of the limit where the host compacts on its own (${room.tokens} of ${room.wall} tokens); the save runs in this context and would fail there. Nothing saved, the session is unchanged.`
@@ -633,12 +794,14 @@ async function pit($: EngineInterface, args: string) {
   }
 
   // Explicit argument binds for the session; a new command replaces the last outcome.
-  if (parsed.stream !== undefined) boundArg = parsed.stream
+  if (argStream !== undefined) boundArg = argStream
   outcome = undefined
   hint = undefined
   const stream = current()
 
   saving = true
+  autoAborted = false
+  autoRunning = auto !== undefined
   startProgress($, `Pitting stream "${stream}"`, stream)
   let built: Built
   try {
@@ -646,14 +809,22 @@ async function pit($: EngineInterface, args: string) {
   } finally {
     saving = false
   }
+  if (auto && autoAborted) {
+    // The user came back during the fork: their turn is not cleared. The notes file is written and valid; nothing else is.
+    autoRunning = false
+    flowStatus($, undefined)
+    trace($, 'autopit.abort', { at: 'fork' }, stream)
+    return { text: 'pit: auto-pit cancelled, you came back first. Notes kept.' }
+  }
   if (built.kind === 'blocked') {
+    autoRunning = false
     // Rail 1: nothing is cleared, the session stays as it is.
     fail($, `Pit of stream "${stream}" failed: ${built.reason.replace(/\.$/, '')}. Session kept.`, 'PIT FAILED, session kept')
     return { text: `pit: could not save stream "${stream}": ${built.reason.replace(/\.$/, '')}. No /clear run, the session is unchanged.` }
   }
 
   trace($, 'notes.written', { path: `${cwd}/${NOTES_DIR}/${stream}-notes.md`, chars: built.state.length }, stream)
-  pending = { text: built.state, createdAt: await $.clock.now(), root: cwd, stream, ...(debugOn() ? { sid: await sidNow($) } : {}) }
+  pending = { text: built.state, createdAt: await $.clock.now(), root: cwd, stream, ...(debugOn() ? { sid: await sidNow($) } : {}), ...(auto ? { auto } : {}) }
   try {
     await persist($)
     trace($, 'pending.persisted', { ok: true }, stream)
@@ -668,6 +839,13 @@ async function pit($: EngineInterface, args: string) {
   // $.command.run rejects inside the hook the run waits on, so the /clear runs from a $.clock.after dispatch, after the hook returned.
   // If the host still refuses, the human types /clear.
   $.clock.after(1, () => {
+    if (auto && autoAborted) {
+      autoRunning = false
+      void reset($)
+      trace($, 'autopit.abort', { at: 'clear' }, stream)
+      return
+    }
+    autoRunning = false
     $.command.run({ command: 'clear' }).then(
       () => {
         pitDone($)
@@ -749,6 +927,36 @@ export function registerPit(on: On) {
     return next(e)
   })
 
+  // dash.ts holds turn.complete, debug.ts holds turn.start and prompt.submit, each without a matcher, and the host refuses a second unmatched hook on an event:
+  // the turn end is taken here with a matcher on every `reason`, the turn start and the prompt through classic.UserPromptSubmit below.
+  on('turn.complete', { reason: ['answer', 'aborted', 'refusal', 'error'] }, async ($, e, next) => {
+    const result = await next(e)
+    if (e.agentId === undefined) {
+      try {
+        turnRunning = false
+        lastTurnAt = await $.clock.now()
+        if (skipNextArm) skipNextArm = false
+        else await armAutopit($)
+      } catch (err) {
+        $.ui.log(`stint: auto-pit not armed: ${String(err)}`, { to: 'debug' })
+      }
+    }
+    return result
+  }).catch(($, e, next) => next(e))
+
+  on('config.set', { key: AUTOPIT_KEY }, async ($, e, next) => {
+    const result = await next(e)
+    if ('deny' in result && result.deny !== undefined) return result
+    autopitMode = String(e.value)
+    try {
+      if (autopitDelayMs(autopitMode) === null) cancelAutopit()
+      else if (lastTurnAt !== null && !turnRunning && !skipNextArm) await armAutopit($, (await $.clock.now()) - lastTurnAt)
+    } catch (err) {
+      $.ui.log(`stint: auto-pit not re-armed: ${String(err)}`, { to: 'debug' })
+    }
+    return result
+  }).catch(($, e, next) => next(e))
+
   on('command.run', { command: 'pit' }, ($, e) => pit($, e.args)).catch(($, e, next) => {
     noteCaught($, 'command.run pit', next.error)
     saving = false
@@ -761,6 +969,10 @@ export function registerPit(on: On) {
   })
 
   on('classic.UserPromptSubmit', async ($, e, next) => {
+    // Any prompt, typed or injected, starts a turn and ends the idle period. One that lands while an auto-pit is saving aborts it before the /clear.
+    turnRunning = true
+    cancelAutopit()
+    if (autoRunning) autoAborted = true
     // The hint was seen: it goes at the first prompt.
     if (hint !== undefined) {
       hint = undefined
@@ -777,7 +989,13 @@ export function registerPit(on: On) {
     trace($, 'session.start', { source: e.source, sid: e.session_id, cwd: e.cwd })
     hint = undefined
     outcome = undefined
+    // A new context: no idle period carries over, and the next turn.complete starts a fresh one.
+    cancelAutopit()
+    lastTurnAt = null
+    turnRunning = false
+    autoRunning = false
     if (e.source !== 'clear') {
+      skipNextArm = false
       // A new, resumed or forked session is another session: unbind and drop any armed injection.
       if (e.source === 'startup' || e.source === 'resume' || e.source === 'fork') {
         boundArg = null
@@ -817,7 +1035,8 @@ export function registerPit(on: On) {
 
     // Rail 3: the binding survives /clear; restore it when a mod reload lost it.
     if (boundArg === null) boundArg = armed.stream
-    inject($, armed.stream, armed.text, false)
+    if (armed.auto) skipNextArm = true
+    inject($, armed.stream, armed.text, false, armed.auto ? autoLine(armed.auto, `${NOTES_DIR}/${armed.stream}-notes.md`) : undefined)
     $.ui.toast(`Fresh session started with the notes of stream "${armed.stream}"`)
     return next(e)
   }).catch(($, e, next) => {

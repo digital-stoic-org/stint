@@ -1,6 +1,6 @@
 {
   "name": "stint",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Run your agent in stints. Pit before the redline.",
   "author": {
     "name": "dstoic",
@@ -18,6 +18,18 @@
         "full",
         "ascii",
         "off"
+      ]
+    },
+    "autopit": {
+      "type": "string",
+      "title": "stint · Auto-pit",
+      "description": "Pit by itself when the session sits idle, before the 1 h prompt cache expires. Runs only with 80k tokens or more of context, nothing typed in the prompt box, and no turn or agent running; a draft or a busy session skips it. The fresh session opens with one line (when, how long idle, how big, where the notes are), a short summary, then waits for you. on: after 50 min idle. on-55m / on-40m: after 55 / 40 min. off: never.",
+      "default": "on",
+      "options": [
+        "on",
+        "off",
+        "on-55m",
+        "on-40m"
       ]
     },
     "debug": {
