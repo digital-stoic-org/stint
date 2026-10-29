@@ -196,10 +196,19 @@
 #v3 .gloss code{font:600 .92em var(--mono);background:var(--ink);color:var(--paper);padding:1px 6px}
 
 /* ---------- install ---------- */
-#v3 .inst{padding:52px 0 8px;scroll-margin-top:70px}
+#v3 .inst{padding:52px 0 68px;scroll-margin-top:70px}
 #v3 .install{display:inline-block;max-width:100%;border:2px solid var(--ink);background:var(--card);box-shadow:5px 6px 0 var(--shadow-2);border-radius:3px 8px 4px 7px/7px 3px 8px 4px;transform:rotate(-.5deg)}
 #v3 .install .tab{display:block;background:var(--ink);color:var(--paper);font:700 11px/1 var(--mono);letter-spacing:.14em;padding:6px 12px;text-transform:uppercase}
-#v3 .install code{display:block;font:600 clamp(.82rem,1.7vw,1rem)/1.5 var(--mono);padding:14px 16px;overflow-wrap:anywhere;white-space:pre-wrap;color:var(--ink)}
+#v3 .install .cmd{display:flex;align-items:center;gap:8px;padding-right:12px}
+#v3 .install .cmd + .cmd{border-top:1px dashed var(--line)}
+#v3 .install code{display:block;flex:1;min-width:0;font:600 clamp(.82rem,1.7vw,1rem)/1.5 var(--mono);padding:14px 16px;overflow-wrap:anywhere;white-space:pre-wrap;color:var(--ink)}
+#v3 .copy-btn{flex:none;display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;padding:0;background:transparent;color:var(--ink);border:2px solid var(--ink);border-radius:3px 8px 4px 7px/7px 3px 8px 4px;cursor:pointer}
+#v3 .copy-btn:hover{background:var(--ink);color:var(--paper)}
+#v3 .copy-btn:focus-visible{outline:3px solid var(--signal);outline-offset:2px}
+#v3 .copy-btn svg{display:block}
+#v3 .copy-btn .i-check{display:none}
+#v3 .copy-btn.copied .i-copy{display:none}
+#v3 .copy-btn.copied .i-check{display:inline}
 #v3 .req{margin:14px 0 0;font:13px/1.4 var(--mono);color:var(--ink-soft)}
 #v3 .req a{color:var(--ink);text-decoration:underline;text-underline-offset:3px}
 #v3 .req a:focus-visible{outline:3px solid var(--signal);outline-offset:3px}
@@ -215,10 +224,9 @@
 #v3 [id]{scroll-margin-top:64px}
 #v3 .topnav{position:sticky;top:0;z-index:30;background:var(--paper);border-bottom:1.5px solid var(--graphite)}
 #v3 .navbar{display:flex;align-items:center;flex-wrap:wrap;gap:0 22px;min-height:46px}
-#v3 .wm{order:1;display:inline-flex;align-items:center;gap:8px;font:800 15px/1 var(--mono);letter-spacing:.02em;color:var(--ink);text-decoration:none;padding:10px 0}
-#v3 .wm .br{color:var(--signal)}
+#v3 .wm{order:1;display:inline-flex;align-items:center;gap:8px;font:700 13.5px/1 var(--mono);letter-spacing:.02em;color:var(--ink);text-decoration:none;padding:10px 0}
 #v3 .logo-defs{position:absolute;width:0;height:0;overflow:hidden}
-#v3 .wm svg{width:26px;height:26px;flex:0 0 26px;--acc:var(--signal)}
+#v3 .wm svg{width:24px;height:24px;flex:0 0 24px;--acc:var(--signal)}
 #v3 .foot svg{display:inline-block;vertical-align:middle;width:20px;height:20px;margin-right:10px;color:var(--ink);--acc:var(--signal)}
 #v3 .navlinks{order:2;display:flex;flex:1;gap:0 20px;list-style:none;margin:0;padding:0}
 #v3 .navlinks li{margin:0}
@@ -259,6 +267,9 @@
 #v3 .soon-tag{font:700 12px/1.3 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--signal);border:1.5px dashed var(--signal);padding:3px 8px}
 #v3 .road-r a{font:600 13px/1.4 var(--mono);color:var(--ink);text-decoration:underline;text-underline-offset:3px}
 #v3 .road-r a:focus-visible{outline:3px solid var(--signal);outline-offset:3px}
+#v3 .road-list{list-style:none;margin:0;padding:0;font:600 13px/1.6 var(--mono);color:var(--ink-soft)}
+#v3 .road-list li{margin:0}
+#v3 .road-list code{font:600 .92em var(--mono);background:var(--ink);color:var(--paper);padding:1px 6px;margin-right:6px}
 
 @keyframes v3-flash{0%{background:rgba(255,154,85,.55);transform:scale(1.12)}100%{background:transparent;transform:scale(1)}}
 
@@ -280,6 +291,7 @@
   #v3{font-size:16px}
   #v3 .wrap{padding:0 16px}
   #v3 .install{box-shadow:3px 4px 0 var(--shadow-2)}
+  #v3 .copy-btn{width:44px;height:44px;min-width:44px;min-height:44px}
   #v3 ol.steps li{grid-template-columns:48px 1fr;gap:14px}
   #v3 ol.steps::before{left:23px}
   #v3 .no{width:48px;height:48px;font-size:1.2rem;line-height:43px}
@@ -339,12 +351,12 @@
 
 <header class="topnav">
   <div class="wrap navbar">
-    <a class="wm" href="index.html" aria-label="stint, home"><svg viewBox="0 0 64 64" aria-hidden="true"><use href="#b2"/></svg><span class="br" aria-hidden="true">[</span>stint<span class="br" aria-hidden="true">]</span></a>
+    <a class="wm" href="index.html" aria-label="stint, home"><svg viewBox="0 0 64 64" aria-hidden="true"><use href="#b2"/></svg>stint</a>
     <ul class="navlinks" id="navlinks">
       <li><a class="nav-item" href="why-pit.html">Why pit?</a></li>
       <li><a class="nav-item" href="#procedure">Procedure</a></li>
       <li><a class="nav-item" href="#glossary">Glossary</a></li>
-      <li><a class="nav-item off" role="link" aria-disabled="true" tabindex="-1">Roadmap<span class="soon">soon</span></a></li>
+      <li><a class="nav-item" href="#roadmap">Roadmap<span class="soon">soon</span></a></li>
     </ul>
     <a class="btn-install" href="#install">Install</a>
     <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="navlinks">Menu</button>
@@ -600,8 +612,9 @@
     <h2>Simple to install</h2>
     <div class="install">
       <span class="tab">Install</span>
-      <code>/plugin marketplace add digital-stoic-org/stint
-/plugin install stint@pitlane</code>
+      <div class="cmd"><code>/plugin marketplace add digital-stoic-org/stint</code><button type="button" class="copy-btn" aria-label="Copy command" title="Copy"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><g class="i-copy"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></g><path class="i-check" d="M4 12.5l5 5L20 6.5"/></svg></button></div>
+      <div class="cmd"><code>/plugin install stint@pitlane</code><button type="button" class="copy-btn" aria-label="Copy command" title="Copy"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><g class="i-copy"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></g><path class="i-check" d="M4 12.5l5 5L20 6.5"/></svg></button></div>
+      <span class="sr" role="status" aria-live="polite"></span>
     </div>
     <p class="req">Requires Claude Code 2.1.311+. <a href="https://github.com/digital-stoic-org/stint">github.com/digital-stoic-org/stint</a></p>
   </div>
@@ -625,14 +638,18 @@
   </div>
 </div>
 
-<div class="roadbar">
+<div class="roadbar" id="roadmap">
   <div class="wrap roadbar-in">
     <div class="road-l">
       <p class="eyebrow">Next season · roadmap</p>
       <p class="road-t">More mods are on the grid.</p>
     </div>
     <div class="road-r">
-      <span class="soon-tag">Coming soon</span>
+      <ul class="road-list">
+        <li><code>checkpoint</code> Logs the moments that matter, builds notes</li>
+        <li><code>auto pit</code> Pits by itself at the redline</li>
+        <li><code>radio</code> Warns the model as context climbs</li>
+      </ul>
       <a href="https://github.com/digital-stoic-org/stint">Watch the repo on GitHub &rarr;</a>
     </div>
   </div>
@@ -776,6 +793,53 @@
       entries.forEach(function(e){ if(e.isIntersecting) start(); else stop(); });
     },{threshold:0.15}).observe(root);
   } else { start(); }
+})();
+</script>
+<script>
+(function(){
+  var root = document.getElementById('install');
+  if(!root) return;
+  var live = root.querySelector('.sr');
+  var liveTimer = null;
+  function say(msg){
+    if(!live) return;
+    live.textContent = msg;
+    clearTimeout(liveTimer);
+    liveTimer = setTimeout(function(){ live.textContent = ''; }, 2000);
+  }
+  function fallbackCopy(text){
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;pointer-events:none';
+    document.body.appendChild(ta);
+    var ok = false;
+    try { ta.focus(); ta.select(); ta.setSelectionRange(0, text.length); ok = document.execCommand('copy'); } catch(e){ ok = false; }
+    document.body.removeChild(ta);
+    return ok;
+  }
+  function done(btn, ok){
+    if(ok){
+      btn.classList.add('copied');
+      say('Copied');
+      clearTimeout(btn._t);
+      btn._t = setTimeout(function(){ btn.classList.remove('copied'); }, 1500);
+    } else {
+      say('Copy failed');
+    }
+  }
+  root.addEventListener('click', function(ev){
+    var btn = ev.target.closest ? ev.target.closest('.copy-btn') : null;
+    if(!btn || !root.contains(btn)) return;
+    var code = btn.parentNode.querySelector('code');
+    if(!code) return;
+    var text = code.textContent.trim();
+    if(window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(text).then(function(){ done(btn, true); }, function(){ done(btn, fallbackCopy(text)); });
+    } else {
+      done(btn, fallbackCopy(text));
+    }
+  });
 })();
 </script>
 </section>

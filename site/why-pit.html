@@ -56,10 +56,9 @@
 #v3 [id]{scroll-margin-top:64px}
 #v3 .topnav{position:sticky;top:0;z-index:30;background:var(--paper);border-bottom:1.5px solid var(--graphite)}
 #v3 .navbar{display:flex;align-items:center;flex-wrap:wrap;gap:0 22px;min-height:46px}
-#v3 .wm{order:1;display:inline-flex;align-items:center;gap:8px;font:800 15px/1 var(--mono);letter-spacing:.02em;color:var(--ink);text-decoration:none;padding:10px 0}
-#v3 .wm .br{color:var(--signal)}
+#v3 .wm{order:1;display:inline-flex;align-items:center;gap:8px;font:700 13.5px/1 var(--mono);letter-spacing:.02em;color:var(--ink);text-decoration:none;padding:10px 0}
 #v3 .logo-defs{position:absolute;width:0;height:0;overflow:hidden}
-#v3 .wm svg{width:26px;height:26px;flex:0 0 26px;--acc:var(--signal)}
+#v3 .wm svg{width:24px;height:24px;flex:0 0 24px;--acc:var(--signal)}
 #v3 .foot svg{display:inline-block;vertical-align:middle;width:20px;height:20px;margin-right:10px;color:var(--ink);--acc:var(--signal)}
 #v3 .navlinks{order:2;display:flex;flex:1;gap:0 20px;list-style:none;margin:0;padding:0}
 #v3 .navlinks li{margin:0}
@@ -96,6 +95,9 @@
 #v3 .soon-tag{font:700 12px/1.3 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--signal);border:1.5px dashed var(--signal);padding:3px 8px}
 #v3 .road-r a{font:600 13px/1.4 var(--mono);color:var(--ink);text-decoration:underline;text-underline-offset:3px}
 #v3 .road-r a:focus-visible{outline:3px solid var(--signal);outline-offset:3px}
+#v3 .road-list{list-style:none;margin:0;padding:0;font:600 13px/1.6 var(--mono);color:var(--ink-soft)}
+#v3 .road-list li{margin:0}
+#v3 .road-list code{font:600 .92em var(--mono);background:var(--ink);color:var(--paper);padding:1px 6px;margin-right:6px}
 
 
 /* ---------- why-pit page ---------- */
@@ -288,12 +290,12 @@
 
 <header class="topnav">
   <div class="wrap navbar">
-    <a class="wm" href="index.html" aria-label="stint, home"><svg viewBox="0 0 64 64" aria-hidden="true"><use href="#b2"/></svg><span class="br" aria-hidden="true">[</span>stint<span class="br" aria-hidden="true">]</span></a>
+    <a class="wm" href="index.html" aria-label="stint, home"><svg viewBox="0 0 64 64" aria-hidden="true"><use href="#b2"/></svg>stint</a>
     <ul class="navlinks" id="navlinks">
       <li><a class="nav-item" href="why-pit.html" aria-current="page">Why pit?</a></li>
       <li><a class="nav-item" href="index.html#procedure">Procedure</a></li>
       <li><a class="nav-item" href="index.html#glossary">Glossary</a></li>
-      <li><a class="nav-item off" role="link" aria-disabled="true" tabindex="-1">Roadmap<span class="soon">soon</span></a></li>
+      <li><a class="nav-item" href="index.html#roadmap">Roadmap<span class="soon">soon</span></a></li>
     </ul>
     <a class="btn-install" href="#install">Install</a>
     <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="navlinks">Menu</button>
@@ -400,14 +402,18 @@
   </div>
 </div>
 
-<div class="roadbar">
+<div class="roadbar" id="roadmap">
   <div class="wrap roadbar-in">
     <div class="road-l">
       <p class="eyebrow">Next season · roadmap</p>
       <p class="road-t">More mods are on the grid.</p>
     </div>
     <div class="road-r">
-      <span class="soon-tag">Coming soon</span>
+      <ul class="road-list">
+        <li><code>checkpoint</code> Logs the moments that matter, builds notes</li>
+        <li><code>auto pit</code> Pits by itself at the redline</li>
+        <li><code>radio</code> Warns the model as context climbs</li>
+      </ul>
       <a href="https://github.com/digital-stoic-org/stint">Watch the repo on GitHub &rarr;</a>
     </div>
   </div>
