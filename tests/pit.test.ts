@@ -4,7 +4,9 @@ import type { On } from 'claude-code'
 import {
   AGENT_LINE,
   AGENTS_UNKNOWN,
+  AUTOPIT_CEILING,
   AUTOPIT_KEY,
+  COMMANDS,
   AUTOPIT_MAX_AGE_MS,
   AUTOPIT_MIN_TOKENS,
   NOTES_MAX,
@@ -12,6 +14,9 @@ import {
   UNPACK_RULES,
   WALL_CAP,
   agentLinesOf,
+  archiveName,
+  archiveStamp,
+  ceilingSkip,
   autoLine,
   autoUnpackRules,
   autopitDelayMs,
@@ -26,6 +31,7 @@ import {
   injectText,
   notesPath,
   overWall,
+  overwriteWarning,
   parseArgs,
   parseFork,
   parseForkBody,
@@ -81,6 +87,11 @@ test('notesPath: <cwd>/.stint/<stream>-notes.md', () => {
 test('streamsFromNames: only <stream>-notes.md files, sorted', () => {
   expect(streamsFromNames(['b-notes.md', 'a-notes.md', 'readme.md', 'x-notes.txt', '-notes.md', 'a b-notes.md', 'a-notes-notes.md'])).toEqual(['a', 'a-notes', 'b'])
   expect(streamsFromNames([])).toEqual([])
+})
+
+test('streamsFromNames: archive-looking names and the archive directory are not streams', () => {
+  expect(streamsFromNames(['archive', 'proj-notes.md', 'proj-notes-20261029-1405.md', 'proj-notes-20261029-1405-2.md', 'archive-notes.md.bak'])).toEqual(['proj'])
+  expect(streamsFromNames(['archive'])).toEqual([])
 })
 
 test('overWall: at or above 95% of the wall', () => {
@@ -343,11 +354,15 @@ type World = {
   files: Map<string, string>
   forkText: string | null
   gate: Promise<void> | null
-  usage: { tokens?: number; wall: number } | 'throws'
+  usage: { tokens?: number; wall: number; window?: number } | 'throws'
   clock: { advance: (ms: number) => Promise<void> }
   agents: { id: string; name?: string; description: string; type: string; status: string }[]
   refuseClear: boolean
   failWrites: boolean
+  // writes under .stint/archive/ fail
+  failArchive: boolean
+  // a second row in the config list (the host's idle compaction row), or 'throws'
+  idleRow: { key: string; label: string; value: unknown } | 'throws' | null
   // auto-pit: the Auto-pit row's value and the text in the prompt box
   mode: string
   draft: string | null
@@ -371,6 +386,8 @@ function world(on: On, forkText: string | null, now = 1_000_000): World {
     agents: [],
     refuseClear: false,
     failWrites: false,
+    failArchive: false,
+    idleRow: null,
     mode: 'on',
     draft: '',
   }
@@ -391,7 +408,7 @@ function world(on: On, forkText: string | null, now = 1_000_000): World {
   on('session.id', () => ({ value: 'sess-1' }))
   on('session.usage', () => {
     if (w.usage === 'throws') throw new Error('usage down')
-    return { value: { startedAt: 0, context: { window: 200_000, tokens: w.usage.tokens, breakdown: { autoCompactThreshold: w.usage.wall } }, rateLimits: [] } } as never
+    return { value: { startedAt: 0, context: { window: w.usage.window ?? 200_000, tokens: w.usage.tokens, breakdown: { autoCompactThreshold: w.usage.wall } }, rateLimits: [] } } as never
   })
   on('fs.exists', (_$, e) => ({ value: w.files.has(e.path) }))
   on('fs.read', (_$, e) => {
@@ -399,20 +416,28 @@ function world(on: On, forkText: string | null, now = 1_000_000): World {
     return text === undefined ? { deny: 'ENOENT' } : { value: text }
   })
   on('fs.write', (_$, e) => {
-    if (w.failWrites) return { deny: 'EACCES' }
+    if (w.failWrites || (w.failArchive && e.path.includes('/.stint/archive/'))) return { deny: 'EACCES' }
     w.files.set(e.path, e.text)
     return { value: undefined }
   })
   on('fs.list', (_$, e) => {
     const prefix = `${e.path}/`
-    const names = [...w.files.keys()].filter(p => p.startsWith(prefix) && !p.slice(prefix.length).includes('/')).map(p => p.slice(prefix.length))
-    if (names.length === 0) return { deny: 'ENOENT' }
-    return { value: names.map(name => ({ name, kind: 'file', size: 1, mtimeMs: 0, isLink: false })) } as never
+    const rest = [...w.files.keys()].filter(p => p.startsWith(prefix)).map(p => p.slice(prefix.length))
+    const files = rest.filter(r => !r.includes('/'))
+    // a nested path is a directory entry, once
+    const dirs = [...new Set(rest.filter(r => r.includes('/')).map(r => r.slice(0, r.indexOf('/'))))]
+    if (files.length + dirs.length === 0) return { deny: 'ENOENT' }
+    return { value: [...files.map(name => ({ name, kind: 'file' })), ...dirs.map(name => ({ name, kind: 'dir' }))].map(e => ({ ...e, size: 1, mtimeMs: 0, isLink: false })) } as never
   })
   on('session.measure', (_$, e) => ({ changed: [...e.changed] }))
   on('turn.start', (_$, e) => ({ turnId: e.turnId }))
   on('turn.complete', (_$, e) => ({ text: e.answer }))
-  on('config.list', () => ({ value: [{ key: AUTOPIT_KEY, label: 'stint · Auto-pit', kind: 'choice', value: w.mode, provider: { plugin: 'stint', tier: 'plugin' }, isLocked: false }] }) as never)
+  on('config.list', () => {
+    if (w.idleRow === 'throws') throw new Error('config down')
+    const rows = [{ key: AUTOPIT_KEY, label: 'stint · Auto-pit', kind: 'choice', value: w.mode, provider: { plugin: 'stint', tier: 'plugin' }, isLocked: false }]
+    if (w.idleRow) rows.push({ ...w.idleRow, kind: 'toggle', provider: { plugin: 'host', tier: 'builtin' }, isLocked: false } as never)
+    return { value: rows } as never
+  })
   on('config.set', { key: AUTOPIT_KEY }, (_$, e) => ({ value: e.value }))
   on('prompt.read', () => {
     if (w.draft === null) throw new Error('prompt box down')
@@ -940,10 +965,10 @@ test('root: no root from the host falls back to the cwd', async ($, on) => {
 
 // ---------- auto-pit (idle trigger) ----------
 
-test('autopitDelayMs: on = 50 min, on-55m, on-40m, off = null, an unknown value reads as the default', () => {
+test('autopitDelayMs: on = 50 min, off = null, an unknown value (even an old on-55m / on-40m) reads as the default', () => {
   expect(autopitDelayMs('on')).toBe(50 * 60_000)
-  expect(autopitDelayMs('on-55m')).toBe(55 * 60_000)
-  expect(autopitDelayMs('on-40m')).toBe(40 * 60_000)
+  expect(autopitDelayMs('on-55m')).toBe(50 * 60_000)
+  expect(autopitDelayMs('on-40m')).toBe(50 * 60_000)
   expect(autopitDelayMs('off')).toBeNull()
   expect(autopitDelayMs('on-60m')).toBe(50 * 60_000)
   expect(autopitDelayMs(undefined)).toBe(50 * 60_000)
@@ -971,14 +996,72 @@ test('autopitSkip: every guard names its reason; all clear = null; an unreadable
 
 test('autoLine and injectText: the auto variant carries the line and the wait rules, the manual text is unchanged', () => {
   const at = new Date(2026, 9, 29, 14, 5).getTime()
-  const line = autoLine({ at, idleMin: 50, tokens: 91_400 }, '.stint/proj-notes.md')
+  const line = autoLine({ kind: 'idle', at, idleMin: 50, tokens: 91_400 }, '.stint/proj-notes.md')
   expect(line).toBe('⏸ auto-pit at 14:05 · 50 min idle · 91k → notes .stint/proj-notes.md')
+  // a mark stored before `kind` existed reads as idle
+  expect(autoLine({ at, idleMin: 50, tokens: 91_400 } as never, '.stint/proj-notes.md')).toBe(line)
   expect(injectText('notes\n')).toBe(`notes\n\n${UNPACK_RULES}`)
   const auto = injectText('notes\n', line)
   expect(auto).toBe(`notes\n\n${autoUnpackRules(line)}`)
   expect(auto).toContain(`exactly this, with nothing before it:\n${line}`)
   expect(auto).toContain('do not resume the task')
   expect(auto).not.toContain(UNPACK_RULES)
+  // the idle text is the pass-1 text, byte for byte
+  expect(autoUnpackRules('L')).toBe(`Your first line is exactly this, with nothing before it:
+L
+Then summarize the notes in 3 to 5 short lines: status, goal, what is in progress, the next action.
+Then stop and wait for me. The session was saved and cleared while I was away: do not resume the task.
+Do nothing without my explicit go — no file read, no command, no sub-agent.
+Write a message only when something changes. The rest of the time stay silent.
+Questions go to me, in this window.
+After my go, read the \`read_first\` files before acting.`)
+  expect(autoUnpackRules('L', 'idle')).toBe(autoUnpackRules('L'))
+})
+
+test('autoLine and autoUnpackRules: the ceiling variant, and the overwrite warning after the line', () => {
+  const at = new Date(2026, 9, 29, 9, 7).getTime()
+  const line = autoLine({ kind: 'ceiling', at, tokens: 141_400 }, '.stint/proj-notes.md')
+  expect(line).toBe('⛔ auto-pit (ceiling 70%) at 09:07 · 141k → notes .stint/proj-notes.md')
+  const rules = autoUnpackRules(line, 'ceiling')
+  expect(rules).toContain(`exactly this, with nothing before it:\n${line}\nThen summarize`)
+  expect(rules).toContain('saved and cleared automatically because the context was nearly full')
+  expect(rules).toContain('do not resume the task')
+  expect(rules).not.toContain('while I was away')
+  expect(rules).toContain('Do nothing without my explicit go')
+  const warn = overwriteWarning('proj')
+  expect(warn).toBe('⚠️ proj-notes.md was rewritten by another session; its content was merged into these notes and its previous version is in archive/')
+  const withWarn = autoUnpackRules(line, 'ceiling', warn)
+  expect(withWarn).toContain(`${line}\nThe line right after it is exactly this warning, nothing between them:\n${warn}\nThen summarize`)
+  expect(autoUnpackRules('L', 'idle', warn)).toContain('while I was away')
+  expect(injectText('n\n', line, 'ceiling', warn)).toBe(`n\n\n${withWarn}`)
+})
+
+const CGATE = { mode: 'on', saving: false, turnRunning: false, tokens: 140_000, window: 200_000, draft: '', busyAgents: 0 }
+
+test('ceilingSkip: the threshold is 70% of the window, every guard names its reason, unreadable skips', () => {
+  expect(AUTOPIT_CEILING).toBe(0.7)
+  expect(ceilingSkip(CGATE)).toBeNull()
+  expect(ceilingSkip({ ...CGATE, tokens: 139_999 })).toBe('context below the ceiling')
+  expect(ceilingSkip({ ...CGATE, tokens: null })).toBe('context size unknown')
+  expect(ceilingSkip({ ...CGATE, window: null })).toBe('context size unknown')
+  expect(ceilingSkip({ ...CGATE, window: 0 })).toBe('context size unknown')
+  expect(ceilingSkip({ ...CGATE, mode: 'off' })).toBe('setting is off')
+  expect(ceilingSkip({ ...CGATE, mode: 'on-40m' })).toBeNull()
+  expect(ceilingSkip({ ...CGATE, saving: true })).toBe('a pit is already running')
+  expect(ceilingSkip({ ...CGATE, turnRunning: true })).toBe('a turn is running')
+  expect(ceilingSkip({ ...CGATE, draft: 'half' })).toBe('a draft is in the prompt box')
+  expect(ceilingSkip({ ...CGATE, draft: ' \n' })).toBeNull()
+  expect(ceilingSkip({ ...CGATE, draft: null })).toBe('prompt box unreadable')
+  expect(ceilingSkip({ ...CGATE, busyAgents: 2 })).toBe('agents are running')
+  expect(ceilingSkip({ ...CGATE, busyAgents: null })).toBe('agents unknown')
+})
+
+test('archiveName and archiveStamp: local YYYYMMDD-HHMM, -2 / -3 before .md', () => {
+  const at = new Date(2026, 9, 29, 9, 7).getTime()
+  expect(archiveStamp(at)).toBe('20261029-0907')
+  expect(archiveName('proj', at)).toBe('proj-notes-20261029-0907.md')
+  expect(archiveName('proj', at, 1)).toBe('proj-notes-20261029-0907.md')
+  expect(archiveName('proj', at, 3)).toBe('proj-notes-20261029-0907-3.md')
 })
 
 const IDLE_MS = 50 * 60_000
@@ -1005,11 +1088,11 @@ test('auto-pit: 50 min idle with a big context saves, clears, and the fresh sess
   expect(w.forkPrompts).toHaveLength(1)
   const notes = w.files.get(NOTES) ?? ''
   expect(notes).toContain('stream: proj')
-  expect(w.store.get('stint:pending')).toMatchObject({ stream: 'proj', auto: { idleMin: 50, tokens: 90_000 } })
+  expect(w.store.get('stint:pending')).toMatchObject({ stream: 'proj', auto: { kind: 'idle', idleMin: 50, tokens: 90_000 } })
   await w.clock.advance(5)
   expect(w.clears).toBe(1)
   await clear($)
-  const line = autoLine({ at: 1_000_000 + IDLE_MS, idleMin: 50, tokens: 90_000 }, '.stint/proj-notes.md')
+  const line = autoLine({ kind: 'idle', at: 1_000_000 + IDLE_MS, idleMin: 50, tokens: 90_000 }, '.stint/proj-notes.md')
   expect(w.submits).toEqual([`${notes.trimEnd()}\n\n${autoUnpackRules(line)}`])
   expect(w.store.get('stint:pending')).toBeUndefined()
 })
@@ -1074,7 +1157,7 @@ test('auto-pit: skipped, never postponed, when the context is under 80k, a draft
   expect(w.files.get(NOTES)).toContain('agent in flight: builder [a9] idle')
 })
 
-test('auto-pit: off never arms; the setting is followed live (on counts from the last turn, off cancels, on-40m shortens the wait)', async ($, on) => {
+test('auto-pit: off never arms; the setting is followed live (on counts from the last turn, off cancels)', async ($, on) => {
   const w = world(on, OK())
   w.usage = BIG
   w.mode = 'off'
@@ -1099,15 +1182,6 @@ test('auto-pit: off never arms; the setting is followed live (on counts from the
   await setAutopit($, 'off')
   await w.clock.advance(IDLE_MS)
   expect(w.forkPrompts).toHaveLength(1)
-
-  // a third: 10 min spent, on-40m ends 30 min from now
-  await turnDone($)
-  await w.clock.advance(10 * 60_000)
-  await setAutopit($, 'on-40m')
-  await w.clock.advance(30 * 60_000 - 1)
-  expect(w.forkPrompts).toHaveLength(1)
-  await w.clock.advance(1)
-  expect(w.forkPrompts).toHaveLength(2)
 })
 
 test('auto-pit: the ready turn of an auto-pit does not arm a second one; the turn after it does', async ($, on) => {
@@ -1163,4 +1237,497 @@ test('auto-pit: /clear and a new session reset the idle clock; the manual /pit i
   expect(w.clears).toBe(1)
   await clear($)
   expect(w.submits).toEqual([injectText(w.files.get(NOTES) ?? '')])
+})
+
+// ---------- auto-pit (ceiling trigger) ----------
+
+// 70% of a 100k window: the ceiling is met, the idle trigger (80k) is not, so one trigger is tested at a time.
+const CEIL = { tokens: 70_000, wall: 100_000, window: 100_000 }
+const dirOf = (w: World) => `${w.root ?? CWD}/.stint/archive`
+const archived = (w: World) => [...w.files.keys()].filter(p => p.includes('/.stint/archive/')).sort()
+
+async function ceilWorld($: Engine, on: On) {
+  const w = world(on, OK())
+  w.usage = CEIL
+  await fresh($)
+  await title($, 'proj')
+  return w
+}
+
+test('ceiling: fires right after a turn at 70% and not at 69%; the fresh session opens with the ceiling line and the wait rules', async ($, on) => {
+  const w = await ceilWorld($, on)
+  w.usage = { ...CEIL, tokens: 69_000 }
+  await turnDone($)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(0)
+
+  w.usage = CEIL
+  await typed($)
+  await turnDone($)
+  expect(w.forkPrompts).toHaveLength(0)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(1)
+  const notes = w.files.get(NOTES) ?? ''
+  expect(notes).toContain('stream: proj')
+  expect(w.store.get('stint:pending')).toMatchObject({ stream: 'proj', auto: { kind: 'ceiling', tokens: 70_000 } })
+  expect(w.store.get('stint:pending')).not.toHaveProperty('warn')
+  await w.clock.advance(5)
+  expect(w.clears).toBe(1)
+  await clear($)
+  const line = autoLine({ kind: 'ceiling', at: 1_000_000, tokens: 70_000 }, '.stint/proj-notes.md')
+  expect(line).toMatch(/^⛔ auto-pit \(ceiling 70%\) at \d\d:\d\d · 70k → notes \.stint\/proj-notes\.md$/)
+  expect(w.submits).toEqual([`${notes.trimEnd()}\n\n${autoUnpackRules(line, 'ceiling')}`])
+})
+
+test('ceiling: a draft skips it, it retries only at the next turn end and never fires later by timer', async ($, on) => {
+  const w = await ceilWorld($, on)
+  w.draft = 'half a sentence'
+  await turnDone($)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(0)
+  w.draft = ''
+  await w.clock.advance(IDLE_MS * 2)
+  expect(w.forkPrompts).toHaveLength(0)
+  expect(w.clears).toBe(0)
+  await turnDone($)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(1)
+})
+
+test('ceiling: skipped on a busy agent, an unreadable prompt box, unreadable usage; an idle teammate does not block', async ($, on) => {
+  const w = await ceilWorld($, on)
+  w.agents = [{ id: 'a9', name: 'builder', description: 'writing', type: 'general-purpose', status: 'running' }]
+  await turnDone($)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(0)
+
+  w.agents = []
+  w.draft = null
+  await turnDone($)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(0)
+
+  w.draft = ''
+  w.usage = 'throws'
+  await turnDone($)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(0)
+
+  w.usage = CEIL
+  w.agents = [{ id: 'a9', name: 'builder', description: 'writing', type: 'general-purpose', status: 'idle' }]
+  await turnDone($)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(1)
+  expect(w.files.get(NOTES)).toContain('agent in flight: builder [a9] idle')
+})
+
+test('ceiling: a subagent turn end does not trigger it', async ($, on) => {
+  const w = await ceilWorld($, on)
+  await turnDone($, { agentId: 'a1' })
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(0)
+})
+
+test('ceiling: the ready turn of a ceiling pit does not re-trigger; the next turn does', async ($, on) => {
+  const w = await ceilWorld($, on)
+  await turnDone($)
+  await w.clock.advance(5)
+  await w.clock.advance(5)
+  await clear($)
+  expect(w.forkPrompts).toHaveLength(1)
+  expect(w.submits).toHaveLength(1)
+  // the ready turn: the usage is still high, nothing fires
+  await typed($)
+  await turnDone($)
+  await w.clock.advance(IDLE_MS * 2)
+  expect(w.forkPrompts).toHaveLength(1)
+  // the turn after it triggers as usual
+  await typed($)
+  await turnDone($)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(2)
+})
+
+test('ceiling: the ready turn of an idle pit triggers neither the ceiling nor a new idle wait', async ($, on) => {
+  const w = await idleWorld($, on)
+  await w.clock.advance(IDLE_MS + 5)
+  await clear($)
+  expect(w.forkPrompts).toHaveLength(1)
+  w.usage = { tokens: 150_000, wall: 200_000 }
+  await typed($)
+  await turnDone($)
+  await w.clock.advance(IDLE_MS * 2)
+  expect(w.forkPrompts).toHaveLength(1)
+  // control: the next turn end does fire the ceiling at 75%
+  await typed($)
+  await turnDone($)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(2)
+})
+
+test('ceiling: idle and ceiling never both fire, a ceiling pit cancels the idle wait', async ($, on) => {
+  const w = world(on, OK())
+  // 85k of 100k: over the ceiling and over the idle threshold
+  w.usage = { tokens: 85_000, wall: 100_000, window: 100_000 }
+  await fresh($)
+  await title($, 'proj')
+  await turnDone($)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(1)
+  expect(w.store.get('stint:pending')).toMatchObject({ auto: { kind: 'ceiling' } })
+  // no /clear reached the mod: only the cancelled idle timer could still fire
+  await w.clock.advance(IDLE_MS * 2)
+  expect(w.forkPrompts).toHaveLength(1)
+})
+
+test('setting: an unknown value (on-40m) reads as the default on, 50 min', async ($, on) => {
+  const w = world(on, OK())
+  w.mode = 'on-40m'
+  w.usage = BIG
+  await fresh($)
+  await title($, 'proj')
+  await turnDone($)
+  await w.clock.advance(40 * 60_000 + 5)
+  expect(w.forkPrompts).toHaveLength(0)
+  await w.clock.advance(10 * 60_000)
+  expect(w.forkPrompts).toHaveLength(1)
+})
+
+test('setting: off disables both triggers', async ($, on) => {
+  const off = world(on, OK())
+  off.mode = 'off'
+  off.usage = { tokens: 150_000, wall: 200_000 }
+  await fresh($)
+  await title($, 'proj')
+  await turnDone($)
+  await off.clock.advance(IDLE_MS * 2)
+  expect(off.forkPrompts).toHaveLength(0)
+  expect(off.clears).toBe(0)
+})
+
+// ---------- notes archive ----------
+
+test('archive: three writes leave two archive files with the previous contents; the first write archives nothing', async ($, on) => {
+  const w = world(on, OK())
+  await fresh($)
+  await pit($)
+  const n1 = w.files.get(NOTES) ?? ''
+  expect(archived(w)).toEqual([])
+  await w.clock.advance(60_000)
+  expect((await pit($)).text).toBe('pit: saved .stint/proj-notes.md')
+  const n2 = w.files.get(NOTES) ?? ''
+  await w.clock.advance(60_000)
+  expect((await pit($)).text).toBe('pit: saved .stint/proj-notes.md')
+  const n3 = w.files.get(NOTES) ?? ''
+  expect(new Set([n1, n2, n3]).size).toBe(3)
+  const first = `${dirOf(w)}/${archiveName('proj', 1_060_000)}`
+  const second = `${dirOf(w)}/${archiveName('proj', 1_120_000)}`
+  expect(archived(w)).toEqual([first, second].sort())
+  expect(w.files.get(first)).toBe(n1)
+  expect(w.files.get(second)).toBe(n2)
+  expect(first).toMatch(/\/\.stint\/archive\/proj-notes-\d{8}-\d{4}\.md$/)
+})
+
+test('archive: a same-minute collision adds -2, -3 and overwrites nothing', async ($, on) => {
+  const w = world(on, OK())
+  await fresh($)
+  await pit($)
+  const n1 = w.files.get(NOTES) ?? ''
+  await pit($)
+  const n2 = w.files.get(NOTES) ?? ''
+  await pit($)
+  const base = `${dirOf(w)}/${archiveName('proj', 1_000_000)}`
+  const two = base.replace(/\.md$/, '-2.md')
+  expect(archived(w)).toEqual([base, two].sort())
+  expect(w.files.get(base)).toBe(n1)
+  expect(w.files.get(two)).toBe(n2)
+  const n3 = w.files.get(NOTES) ?? ''
+  await pit($)
+  expect(w.files.get(base.replace(/\.md$/, '-3.md'))).toBe(n3)
+  expect(w.files.get(base)).toBe(n1)
+  expect(w.files.get(two)).toBe(n2)
+})
+
+test('archive: a failed archive write blocks the pit and overwrites nothing', async ($, on) => {
+  const w = world(on, OK())
+  await fresh($)
+  await pit($)
+  await w.clock.advance(5)
+  const n1 = w.files.get(NOTES)
+  w.failArchive = true
+  const out = await pit($)
+  expect(out.text).toContain('could not save stream "proj"')
+  expect(out.text).toContain('previous notes not archived')
+  expect(out.text).toContain('No /clear run')
+  expect(w.files.get(NOTES)).toBe(n1)
+  await w.clock.advance(5)
+  expect(w.clears).toBe(1)
+})
+
+test('archive: the listing ignores the archive directory and the archived files (hint, rejoin)', async ($, on) => {
+  const w = world(on, OK())
+  await fresh($)
+  await pit($)
+  await w.clock.advance(60_000)
+  await pit($)
+  expect(archived(w)).toHaveLength(1)
+  // the mock listing of .stint now returns archive as a 'dir' entry next to proj-notes.md
+  await fresh($)
+  expect(lastStatus(w)).toBe('Notes for stream "proj" found: /rejoin proj')
+  expect((await rejoin($, 'nope')).text).toBe('rejoin: no notes for stream "nope" in this folder. Nothing loaded. Notes here: proj.')
+  expect((await rejoin($)).text).toBe('rejoin: loading stream "proj" as the first message.')
+})
+
+// ---------- overwrite warning ----------
+
+const WARN = overwriteWarning('proj')
+
+test('overwrite warning: shown on a manual pit after another session rewrote the file; the old version is archived', async ($, on) => {
+  const w = world(on, OK())
+  await fresh($)
+  await pit($)
+  await w.clock.advance(60_000)
+  w.files.set(NOTES, 'stream: proj\ngoal: written elsewhere\n')
+  const out = await pit($)
+  expect(out.text).toBe(`pit: saved .stint/proj-notes.md\n${WARN}`)
+  expect(w.forkPrompts.at(-1)).toContain('goal: written elsewhere')
+  expect(w.files.get(`${dirOf(w)}/${archiveName('proj', 1_060_000)}`)).toBe('stream: proj\ngoal: written elsewhere\n')
+  // the pit that follows is by the same session over its own file: no warning
+  await w.clock.advance(60_000)
+  expect((await pit($)).text).toBe('pit: saved .stint/proj-notes.md')
+})
+
+test('overwrite warning: no baseline, no warning; a read by rejoin is a baseline; /clear keeps it, a new session drops it', async ($, on) => {
+  const w = world(on, OK())
+  w.files.set(NOTES, 'stream: proj\ngoal: old\n')
+  await fresh($)
+  expect((await pit($)).text).toBe('pit: saved .stint/proj-notes.md')
+
+  // new session: file rewritten elsewhere, no baseline
+  await fresh($)
+  w.files.set(NOTES, 'stream: proj\ngoal: elsewhere 1\n')
+  expect((await pit($)).text).toBe('pit: saved .stint/proj-notes.md')
+
+  // rejoin reads the file: baseline
+  await fresh($)
+  w.files.set(NOTES, 'stream: proj\ngoal: elsewhere 2\n')
+  await rejoin($, 'proj')
+  await w.clock.advance(5)
+  w.files.set(NOTES, 'stream: proj\ngoal: elsewhere 3\n')
+  expect((await pit($)).text).toBe(`pit: saved .stint/proj-notes.md\n${WARN}`)
+
+  // /clear keeps the baseline
+  await w.clock.advance(5)
+  await clear($)
+  w.files.set(NOTES, 'stream: proj\ngoal: elsewhere 4\n')
+  expect((await pit($)).text).toBe(`pit: saved .stint/proj-notes.md\n${WARN}`)
+
+  // startup drops it
+  await fresh($)
+  w.files.set(NOTES, 'stream: proj\ngoal: elsewhere 5\n')
+  expect((await pit($)).text).toBe('pit: saved .stint/proj-notes.md')
+})
+
+test('overwrite warning: an auto-pit carries it in the pending and the fresh session is told to show it right after the line', async ($, on) => {
+  const w = await ceilWorld($, on)
+  w.usage = { ...CEIL, tokens: 10_000 }
+  await pit($)
+  await w.clock.advance(5)
+  await clear($)
+  w.files.set(NOTES, 'stream: proj\ngoal: written elsewhere\n')
+  w.usage = CEIL
+  await typed($)
+  await turnDone($)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(2)
+  expect(w.store.get('stint:pending')).toMatchObject({ auto: { kind: 'ceiling' }, warn: WARN })
+  await w.clock.advance(5)
+  await clear($)
+  const sent = w.submits.at(-1) ?? ''
+  expect(sent).toMatch(/^[\s\S]*\nThe line right after it is exactly this warning, nothing between them:\n/)
+  expect(sent).toContain(`\n${WARN}\nThen summarize`)
+  expect(sent).toContain('saved and cleared automatically because the context was nearly full')
+})
+
+// ---------- startup notice ----------
+
+const NOTICE = 'idleCompaction is on: it overlaps the auto-pit idle trigger; /config to turn it off'
+
+test('startup notice: shown at startup and resume when the host row idleCompaction is on', async ($, on) => {
+  const w = world(on, OK())
+  w.idleRow = { key: 'idleCompaction', label: 'Idle compaction', value: true }
+  await fresh($)
+  expect(w.toasts).toEqual([NOTICE])
+  await $.classic.SessionStart({ source: 'resume' })
+  expect(w.toasts).toEqual([NOTICE, NOTICE])
+})
+
+test('startup notice: the row is also matched on its label', async ($, on) => {
+  const l = world(on, OK())
+  l.idleRow = { key: 'somethingElse', label: 'Idle compaction (minutes)', value: true }
+  await fresh($)
+  expect(l.toasts).toEqual([NOTICE])
+})
+
+const hidden = (name: string, setup: (w: World) => void, start = fresh) =>
+  test(`startup notice: hidden when ${name}`, async ($, on) => {
+    const w = world(on, OK())
+    setup(w)
+    await start($)
+    expect(w.toasts).toEqual([])
+  })
+
+hidden('the row is false', w => (w.idleRow = { key: 'idleCompaction', label: 'Idle compaction', value: false }))
+hidden('the row is absent', () => undefined)
+hidden('the row is unreadable', w => (w.idleRow = 'throws'))
+hidden('the auto-pit mode is off', w => {
+  w.mode = 'off'
+  w.idleRow = { key: 'idleCompaction', label: 'Idle compaction', value: true }
+})
+hidden('the source is clear', w => (w.idleRow = { key: 'idleCompaction', label: 'Idle compaction', value: true }), clear)
+
+// ---------- /pit --save (a checkpoint: the notes without the /clear) ----------
+
+test('parseArgs: --save is a flag of /pit, with or without a stream, in any place; /rejoin does not take it', () => {
+  expect(parseArgs('--save', 'pit')).toEqual({ save: true })
+  expect(parseArgs('proj --save', 'pit')).toEqual({ stream: 'proj', save: true })
+  expect(parseArgs('--save proj', 'pit')).toEqual({ stream: 'proj', save: true })
+  expect(parseArgs('--save --save', 'pit')).toEqual({ save: true })
+  expect(parseArgs('proj', 'pit')).toEqual({ stream: 'proj' })
+  expect(parseArgs('', 'pit')).toEqual({})
+  expect(parseArgs('--save a b', 'pit')).toEqual({ error: 'too many arguments. Usage: /pit [stream]' })
+  expect(parseArgs('--save --nope', 'pit')).toEqual({ error: 'unknown option --nope. Usage: /pit [stream]' })
+  // a bare `save` is a stream name, which is why the flag has dashes
+  expect(parseArgs('save', 'pit')).toEqual({ stream: 'save' })
+  expect(parseArgs('--save', 'rejoin')).toEqual({ error: 'unknown option --save. Usage: /rejoin [stream]' })
+})
+
+test('/pit --save: the slash menu hint shows [stream] [--save] [--trace]; /rejoin keeps [stream]', () => {
+  expect(COMMANDS.find(c => c.name === 'pit')?.argumentHint).toBe('[stream] [--save] [--trace]')
+  expect(COMMANDS.find(c => c.name === 'rejoin')?.argumentHint).toBe('[stream]')
+  expect(COMMANDS.find(c => c.name === 'pit')?.description).toContain('--save')
+})
+
+test('/pit --save: notes written, no /clear, no pending, nothing injected, the context is untouched', async ($, on) => {
+  const w = world(on, OK())
+  await fresh($)
+  const out = await pit($, 'proj --save')
+  expect(out.text).toBe('pit: saved .stint/proj-notes.md (no clear)')
+  expect(w.files.get(NOTES)).toContain('goal: ship v2')
+  expect(w.forkPrompts).toHaveLength(1)
+  // the board says so for a moment, then is free again
+  expect(await bandNow($)).toContain('notes saved')
+  await w.clock.advance(60_000)
+  expect(await bandNow($)).not.toContain('notes saved')
+  expect(w.clears).toBe(0)
+  expect(w.store.get('stint:pending')).toBeUndefined()
+  await clear($)
+  expect(w.submits).toHaveLength(0)
+})
+
+test('/pit --save: binds the stream like /pit <stream>; without a stream it uses the bound one or main', async ($, on) => {
+  const w = world(on, OK())
+  await fresh($)
+  expect((await pit($, '--save')).text).toBe('pit: saved .stint/main-notes.md (no clear)')
+  await pit($, 'proj --save')
+  // bound for the session, saves and pits alike
+  expect((await pit($, '--save')).text).toBe('pit: saved .stint/proj-notes.md (no clear)')
+  expect((await pit($, '')).text).toBe('pit: saved .stint/proj-notes.md')
+  expect(w.files.has('/work/.stint/main-notes.md')).toBe(true)
+})
+
+test('/pit --save: the stint number of the notes stays; the next real pit hands over to the next one', async ($, on) => {
+  const w = world(on, OK())
+  await fresh($)
+  await pit($, 'proj --save')
+  expect(parseNotes(w.files.get(NOTES) ?? '').scalars.stint).toBe('1')
+  await pit($, 'proj --save')
+  expect(parseNotes(w.files.get(NOTES) ?? '').scalars.stint).toBe('1')
+  await pit($, 'proj')
+  expect(parseNotes(w.files.get(NOTES) ?? '').scalars.stint).toBe('2')
+  await pit($, 'proj --save')
+  expect(parseNotes(w.files.get(NOTES) ?? '').scalars.stint).toBe('2')
+})
+
+test('/pit --save: archives the previous notes like a pit, and warns when another session rewrote the file', async ($, on) => {
+  const w = world(on, OK())
+  await fresh($)
+  await pit($, 'proj --save')
+  const first = w.files.get(NOTES) ?? ''
+  const second = await pit($, 'proj --save')
+  expect(second.text).toBe('pit: saved .stint/proj-notes.md (no clear)')
+  const archived = [...w.files.keys()].filter(k => k.startsWith('/work/.stint/archive/proj-notes-'))
+  expect(archived).toHaveLength(1)
+  expect(w.files.get(archived[0] as string)).toBe(first)
+  // another session rewrites the live file: this session's baseline no longer matches
+  w.files.set(NOTES, 'stream: proj\nsaved: elsewhere\n')
+  const third = await pit($, 'proj --save')
+  expect(third.text).toContain('pit: saved .stint/proj-notes.md (no clear)\n⚠️ proj-notes.md was rewritten by another session')
+  // the save updated the baseline: the next one is quiet
+  expect((await pit($, 'proj --save')).text).toBe('pit: saved .stint/proj-notes.md (no clear)')
+})
+
+test('/pit --save: refused at 95% of the wall like a pit; a blocked fork reports a failed save and keeps the session', async ($, on) => {
+  const w = world(on, OK())
+  await fresh($)
+  w.usage = { tokens: 95_000, wall: 100_000 }
+  expect((await pit($, 'proj --save')).text).toContain('pit: context is at 95%')
+  expect(w.forkPrompts).toHaveLength(0)
+  w.usage = TOKENS
+  w.forkText = 'GATE: blocked - mid synthesis'
+  const out = await pit($, 'proj --save')
+  expect(out.text).toBe('pit: could not save stream "proj": mid synthesis. No /clear run, the session is unchanged.')
+  expect(lastStatus(w)).toMatch(/^⚠ Save of stream "proj" failed/)
+  expect(w.files.has(NOTES)).toBe(false)
+  await w.clock.advance(5)
+  expect(w.clears).toBe(0)
+})
+
+test('/pit --save: a second save, or a pit, while one runs is refused: one write only', async ($, on) => {
+  const w = world(on, OK())
+  await fresh($)
+  let release: () => void = () => undefined
+  w.gate = new Promise<void>(resolve => (release = resolve))
+  const first = pit($, 'proj --save')
+  await w.clock.advance(1)
+  const again = await pit($, 'proj --save')
+  expect(again.text).toContain('a pit is already running')
+  const manual = await pit($, 'proj')
+  expect(manual.text).toContain('a pit is already running')
+  release()
+  expect((await first).text).toBe('pit: saved .stint/proj-notes.md (no clear)')
+  expect(w.forkPrompts).toHaveLength(1)
+  expect([...w.files.keys()].filter(k => k.includes('/archive/'))).toHaveLength(0)
+})
+
+test('/pit --save and auto-pit: a save leaves the idle wait on its original deadline, even when the slash command was seen as a prompt', async ($, on) => {
+  const w = await idleWorld($, on)
+  await w.clock.advance(10 * 60_000)
+  // the host may raise classic.UserPromptSubmit for the slash command: that cancels the timer and raises the turn flag
+  await typed($)
+  await pit($, 'proj --save')
+  expect(w.forkPrompts).toHaveLength(1)
+  await w.clock.advance(IDLE_MS - 10 * 60_000 - 1)
+  expect(w.forkPrompts).toHaveLength(1)
+  await w.clock.advance(1)
+  expect(w.forkPrompts).toHaveLength(2)
+  await w.clock.advance(5)
+  expect(w.clears).toBe(1)
+})
+
+test('/pit --save and auto-pit: an auto-pit that fires during a save skips, and is not retried right after: the user is at the keyboard', async ($, on) => {
+  const w = await idleWorld($, on)
+  let release: () => void = () => undefined
+  w.gate = new Promise<void>(resolve => (release = resolve))
+  await w.clock.advance(IDLE_MS - 1_000)
+  const saveRun = pit($, 'proj --save')
+  await w.clock.advance(1_000)
+  // the idle wait ended while the save's fork was still out: no second fork, no clear
+  expect(w.forkPrompts).toHaveLength(1)
+  release()
+  await saveRun
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(1)
+  expect(w.clears).toBe(0)
+  expect(w.store.get('stint:pending')).toBeUndefined()
 })

@@ -23,13 +23,11 @@
     "autopit": {
       "type": "string",
       "title": "stint · Auto-pit",
-      "description": "Pit by itself when the session sits idle, before the 1 h prompt cache expires. Runs only with 80k tokens or more of context, nothing typed in the prompt box, and no turn or agent running; a draft or a busy session skips it. The fresh session opens with one line (when, how long idle, how big, where the notes are), a short summary, then waits for you. on: after 50 min idle. on-55m / on-40m: after 55 / 40 min. off: never.",
+      "description": "Pit by itself, in two cases. Idle trigger: the session sits idle for 50 min (before the 1 h prompt cache expires) with 80k tokens or more of context. Ceiling trigger: right after a turn, when the context is at 70% of the window or more. Both skip when a draft is in the prompt box or an agent is busy. The fresh session opens with one line (when, why, how big, where the notes are), a short summary, then waits for you. on: both triggers. off: never.",
       "default": "on",
       "options": [
         "on",
-        "off",
-        "on-55m",
-        "on-40m"
+        "off"
       ]
     },
     "debug": {

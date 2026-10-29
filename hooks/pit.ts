@@ -83,6 +83,18 @@ export function streamsFromNames(names: string[]): string[] {
   return out.sort()
 }
 
+export const ARCHIVE_DIR = 'archive'
+const ARCHIVE_TRIES = 1_000
+
+// Local time stamp of an archive file name: YYYYMMDD-HHMM.
+export function archiveStamp(ms: number): string {
+  const d = new Date(ms)
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`
+}
+
+// n = 1 is the plain name; a same-minute collision adds -2, -3... before .md.
+export const archiveName = (stream: string, ms: number, n = 1) => `${stream}-notes-${archiveStamp(ms)}${n > 1 ? `-${n}` : ''}.md`
+
 // A /rename title that is not a valid stream name becomes one; empty or reserved = no stream.
 export function slugify(title: string): string | null {
   const slug = STREAM_RE.test(title)
@@ -96,21 +108,31 @@ export function slugify(title: string): string | null {
   return slug === '' || RESERVED.includes(slug) ? null : slug
 }
 
+// The slash menu entries; the hint after the name is `argumentHint`.
+export const COMMANDS = [
+  { name: 'pit', description: 'Save the notes of a stream, then continue it in a fresh session (--save: save only, keep this session)', argumentHint: '[stream] [--save] [--trace]' },
+  { name: 'rejoin', description: 'Load the notes of a stream as the first message of this session', argumentHint: '[stream]' },
+]
+
 export type Cmd = 'pit' | 'rejoin'
-export type ParsedArgs = { stream?: string } | { error: string }
+// `save`: /pit --save, the notes without the /clear (only /pit takes it).
+export type ParsedArgs = { stream?: string; save?: boolean } | { error: string }
 
 const USAGE: Record<Cmd, string> = { pit: 'Usage: /pit [stream]', rejoin: 'Usage: /rejoin [stream]' }
+export const SAVE_FLAG = '--save'
 
 export function parseArgs(args: string, cmd: Cmd): ParsedArgs {
-  const tokens = args.split(/\s+/).filter(t => t !== '')
+  const all = args.split(/\s+/).filter(t => t !== '')
+  const save = cmd === 'pit' && all.includes(SAVE_FLAG)
+  const tokens = save ? all.filter(t => t !== SAVE_FLAG) : all
   const bad = tokens.find(t => t.startsWith('-'))
   if (bad) return { error: `unknown option ${bad}. ${USAGE[cmd]}` }
   if (tokens.length > 1) return { error: `too many arguments. ${USAGE[cmd]}` }
   const stream = tokens[0]
-  if (stream === undefined) return {}
+  if (stream === undefined) return save ? { save } : {}
   if (RESERVED.includes(stream)) return { error: `"${stream}" is a reserved word, not a stream name` }
   if (!STREAM_RE.test(stream)) return { error: `invalid stream "${stream}": use 1-50 chars of a-z A-Z 0-9 _ -` }
-  return { stream }
+  return save ? { stream, save } : { stream }
 }
 
 // Explicit binding (a command argument) > session title (/rename) > the default stream.
@@ -128,11 +150,13 @@ export function overWall(tokens: number, wall: number): boolean {
 // The setting row `stint.autopit` (plugin.json userConfig). An unknown value reads as the default.
 export const AUTOPIT_KEY = 'stint.autopit'
 export const AUTOPIT_DEFAULT = 'on'
-const AUTOPIT_DELAY_MIN: Record<string, number> = { on: 50, 'on-55m': 55, 'on-40m': 40 }
+const AUTOPIT_DELAY_MIN: Record<string, number> = { on: 50 }
 // Absolute tokens: a window of 1M makes a percent meaningless here.
 export const AUTOPIT_MIN_TOKENS = 80_000
 // The main conversation's cache lives 1 h from its last request; a fire later than this (machine asleep) finds it dead.
 export const AUTOPIT_MAX_AGE_MS = 58 * 60 * 1000
+// Ceiling trigger: right after a turn, when the context is at or above this share of the window.
+export const AUTOPIT_CEILING = 0.7
 
 // null = off; else the idle wait before the pit, in ms.
 export function autopitDelayMs(mode: unknown): number | null {
@@ -169,12 +193,44 @@ export function autopitSkip(g: AutopitGate): string | null {
   return null
 }
 
-// What the fresh session shows for an auto-pit: when it fired, how long idle, how big the context was.
-export type AutoMark = { at: number; idleMin: number; tokens: number }
+// What the fresh session shows for an auto-pit: when it fired, how long idle (idle trigger only), how big the context was.
+// A mark stored without `kind` (an older pending) is an idle one.
+export type AutoKind = 'idle' | 'ceiling'
+export type AutoMark = { kind: 'idle'; at: number; idleMin: number; tokens: number } | { kind: 'ceiling'; at: number; tokens: number }
 
 export function autoLine(mark: AutoMark, path: string): string {
   const d = new Date(mark.at)
-  return `⏸ auto-pit at ${pad(d.getHours())}:${pad(d.getMinutes())} · ${mark.idleMin} min idle · ${Math.round(mark.tokens / 1000)}k → notes ${path}`
+  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`
+  const k = Math.round(mark.tokens / 1000)
+  if (mark.kind === 'ceiling') return `⛔ auto-pit (ceiling ${Math.round(AUTOPIT_CEILING * 100)}%) at ${hm} · ${k}k → notes ${path}`
+  return `⏸ auto-pit at ${hm} · ${mark.idleMin} min idle · ${k}k → notes ${path}`
+}
+
+// What the ceiling trigger reads after a turn; null = could not be read (that skips).
+export type CeilingGate = {
+  mode: unknown
+  saving: boolean
+  turnRunning: boolean
+  tokens: number | null
+  window: number | null
+  draft: string | null
+  busyAgents: number | null
+}
+
+export const CEILING_BELOW = 'context below the ceiling'
+
+// The reason to skip, or null when every guard holds. CEILING_BELOW is the quiet one (nothing to say, not a skip worth tracing).
+export function ceilingSkip(g: CeilingGate): string | null {
+  if (g.tokens === null || g.window === null || !(g.window > 0)) return 'context size unknown'
+  if (g.tokens / g.window < AUTOPIT_CEILING) return CEILING_BELOW
+  if (autopitDelayMs(g.mode) === null) return 'setting is off'
+  if (g.saving) return 'a pit is already running'
+  if (g.turnRunning) return 'a turn is running'
+  if (g.draft === null) return 'prompt box unreadable'
+  if (g.draft.trim() !== '') return 'a draft is in the prompt box'
+  if (g.busyAgents === null) return 'agents unknown'
+  if (g.busyAgents > 0) return 'agents are running'
+  return null
 }
 
 export const elapsed = (ms: number) => {
@@ -407,18 +463,23 @@ export function forkPrompt(prev: string | null): string {
   return `${FORK_PROMPT}\n\n${budget}\n\nPREVIOUS NOTES:\n${prev ?? '(none)'}`
 }
 
-// Auto-pit only: the user was away and did not ask for this, so the first answer is the line below, a short summary, then silence.
-export const autoUnpackRules = (line: string) => `Your first line is exactly this, with nothing before it:
+// Auto-pit only: the user did not ask for this, so the first answer is the line below, a short summary, then silence.
+// `warn`: the overwrite warning, shown on the line right after the auto line.
+export const autoUnpackRules = (line: string, kind: AutoKind = 'idle', warn?: string) => `Your first line is exactly this, with nothing before it:
 ${line}
-Then summarize the notes in 3 to 5 short lines: status, goal, what is in progress, the next action.
-Then stop and wait for me. The session was saved and cleared while I was away: do not resume the task.
+${warn === undefined ? '' : `The line right after it is exactly this warning, nothing between them:\n${warn}\n`}Then summarize the notes in 3 to 5 short lines: status, goal, what is in progress, the next action.
+Then stop and wait for me. ${kind === 'ceiling' ? 'The session was saved and cleared automatically because the context was nearly full: do not resume the task.' : 'The session was saved and cleared while I was away: do not resume the task.'}
 Do nothing without my explicit go — no file read, no command, no sub-agent.
 Write a message only when something changes. The rest of the time stay silent.
 Questions go to me, in this window.
 After my go, read the \`read_first\` files before acting.`
 
 // The text injected as the first message: the notes, then the rules (the auto-pit variant when `auto` is the line to show first).
-export const injectText = (notes: string, auto?: string) => `${notes.trimEnd()}\n\n${auto === undefined ? UNPACK_RULES : autoUnpackRules(auto)}`
+export const injectText = (notes: string, auto?: string, kind: AutoKind = 'idle', warn?: string) =>
+  `${notes.trimEnd()}\n\n${auto === undefined ? UNPACK_RULES : autoUnpackRules(auto, kind, warn)}`
+
+export const overwriteWarning = (stream: string) =>
+  `⚠️ ${stream}-notes.md was rewritten by another session; its content was merged into these notes and its previous version is in archive/`
 
 function forkFailure(reason: string): string {
   return reason === 'nothing-to-fork' ? 'nothing to save yet: this conversation has no response' : `fork failed (${reason})`
@@ -427,9 +488,12 @@ function forkFailure(reason: string): string {
 // ---------- module state (survives /clear, lost on mod reload; the pending injection is backed up in $.store) ----------
 
 // `sid`: the session of the pit, kept only while debug is on.
-type Pending = { text: string; createdAt: number; root: string; stream: string; sid?: string | undefined; auto?: AutoMark | undefined }
+type Pending = { text: string; createdAt: number; root: string; stream: string; sid?: string | undefined; auto?: AutoMark | undefined; warn?: string | undefined }
 
 let pending: Pending | null = null
+// Notes path -> the text this session last wrote or read there; a different text at pit time means another session rewrote the file.
+// Kept across /clear, dropped on startup/resume/fork.
+const seenNotes = new Map<string, string>()
 // A pit is running (the fork is slow): refuse a second one meanwhile.
 let saving = false
 // Stream binding. Same session across /clear, so it survives /clear; reset on startup/resume/fork.
@@ -555,7 +619,7 @@ async function busyAgents($: EngineInterface): Promise<number | null> {
 
 // ---------- save ----------
 
-type Built = { kind: 'ok'; state: string; cut: string[]; degraded: boolean; stint: number } | { kind: 'blocked'; reason: string }
+type Built = { kind: 'ok'; state: string; cut: string[]; degraded: boolean; stint: number; warn?: string } | { kind: 'blocked'; reason: string }
 
 async function askFork($: EngineInterface, prompt: string): Promise<{ kind: 'ok'; fork: Keyed } | { kind: 'blocked'; reason: string }> {
   const reply = await $.model.fork({ prompt })
@@ -566,7 +630,20 @@ async function askFork($: EngineInterface, prompt: string): Promise<{ kind: 'ok'
   return fork ? { kind: 'ok', fork } : { kind: 'blocked', reason: 'unparseable fork output' }
 }
 
-async function buildNotes($: EngineInterface, cwd: string, stream: string): Promise<Built> {
+// Copies the previous notes to <root>/.stint/archive/<stream>-notes-<YYYYMMDD-HHMM>.md; a name already taken gets -2, -3... Never overwrites, never prunes.
+async function archivePrev($: EngineInterface, cwd: string, stream: string, prev: string, ms: number): Promise<string> {
+  const dir = `${cwd.replace(/\/+$/, '')}/${NOTES_DIR}/${ARCHIVE_DIR}`
+  for (let n = 1; n <= ARCHIVE_TRIES; n++) {
+    const path = `${dir}/${archiveName(stream, ms, n)}`
+    if (await $.fs.exists(path)) continue
+    await $.fs.write(path, prev)
+    return path
+  }
+  throw new Error(`no free archive name for ${archiveName(stream, ms)}`)
+}
+
+// `save`: a checkpoint inside the stint, not a hand-over: the stint number stays.
+async function buildNotes($: EngineInterface, cwd: string, stream: string, save = false): Promise<Built> {
   try {
     const sid = await $.session.id()
     const path = notesPath(cwd, stream)
@@ -575,12 +652,24 @@ async function buildNotes($: EngineInterface, cwd: string, stream: string): Prom
     // One fork per save: an over-cap answer is cut by assemble(), never re-asked.
     const asked = await askFork($, forkPrompt(prev))
     if (asked.kind === 'blocked') return asked
-    const stint = stintOf(prev) + 1
-    const result = assemble({ stream, saved: new Date(await $.clock.now()).toISOString(), sid, prev, fork: asked.fork, agents, stint })
+    const stint = stintOf(prev) + (save ? 0 : 1)
+    const nowMs = await $.clock.now()
+    const result = assemble({ stream, saved: new Date(nowMs).toISOString(), sid, prev, fork: asked.fork, agents, stint })
     if (result.kind === 'blocked') return result
+    // The previous file is copied aside before it is overwritten; if the copy fails nothing is overwritten.
+    if (prev !== null) {
+      try {
+        await archivePrev($, cwd, stream, prev, nowMs)
+      } catch (err) {
+        return { kind: 'blocked', reason: `previous notes not archived (${String(err)}); ${NOTES_DIR}/${stream}-notes.md left unchanged` }
+      }
+    }
+    const seen = seenNotes.get(path)
+    const warn = seen !== undefined && prev !== null && prev !== seen ? overwriteWarning(stream) : undefined
     await $.fs.write(path, result.state)
     if (!(await $.fs.exists(path))) return { kind: 'blocked', reason: `${path} not found after writing` }
-    return { ...result, stint }
+    seenNotes.set(path, result.state)
+    return { ...result, stint, ...(warn ? { warn } : {}) }
   } catch (err) {
     return { kind: 'blocked', reason: `error: ${String(err)}` }
   }
@@ -676,10 +765,12 @@ async function traceCommand($: EngineInterface) {
 // Injection = $.prompt.submit({ asUser: true }): it starts a turn, so UNPACK_RULES can hold the model at its acknowledgement line.
 // The host REFUSES prompt.submit called from inside the command.run hook, so /rejoin passes `defer` and the submit runs from a $.clock.after
 // dispatch, after the hook returned. SessionStart submits directly.
-function inject($: EngineInterface, stream: string, notes: string, defer: boolean, auto?: string) {
+type AutoShow = { line: string; kind: AutoKind; warn?: string | undefined }
+
+function inject($: EngineInterface, stream: string, notes: string, defer: boolean, auto?: AutoShow) {
   const run = () => {
     trace($, 'inject.submit', { state: 'call', chars: notes.length }, stream)
-    $.prompt.submit({ text: injectText(notes, auto), asUser: true }).then(
+    $.prompt.submit({ text: injectText(notes, auto?.line, auto?.kind, auto?.warn), asUser: true }).then(
       () => trace($, 'inject.submit', { state: 'resolve' }, stream),
       err => {
         trace($, 'inject.submit', { state: 'reject', error: String(err) }, stream)
@@ -701,6 +792,27 @@ function backOnTrack($: EngineInterface, stint: number) {
     outcome = undefined
     paint($)
   })
+}
+
+// /pit --save is done: a short positive board line, then the board is free again. Nothing else moves: no pending, no lap, no /clear.
+// The slash command may have been seen as a prompt by classic.UserPromptSubmit (idle timer cancelled, turn flag raised) and no turn.complete follows it:
+// the idle wait is put back on its original deadline, counted from the last turn end. A deadline already behind us stays dropped: the person just typed a command.
+async function savedOnly($: EngineInterface, stream: string, built: { state: string }) {
+  const line: Line = { status: '', board: `notes saved (${built.state.length >= 1000 ? `${(built.state.length / 1000).toFixed(1)}k` : built.state.length}), session kept` }
+  flowStatus($, undefined)
+  outcome = line
+  paint($)
+  $.clock.after(DONE_MS, () => {
+    if (outcome !== line) return
+    outcome = undefined
+    paint($)
+  })
+  trace($, 'save.done', { stream })
+  turnRunning = false
+  if (lastTurnAt === null) return
+  const spent = (await $.clock.now()) - lastTurnAt
+  const delay = autopitDelayMs(await modeNow($))
+  if (delay !== null && spent < delay) await armAutopit($, spent)
 }
 
 // ---------- auto-pit (idle trigger) ----------
@@ -763,10 +875,64 @@ async function autoPit($: EngineInterface) {
       return
     }
     trace($, 'autopit.fire', { tokens, idleMs: now - lastTurnAt })
-    await runPit($, undefined, { at: now, idleMin: Math.round((now - lastTurnAt) / 60_000), tokens })
+    await runPit($, undefined, { kind: 'idle', at: now, idleMin: Math.round((now - lastTurnAt) / 60_000), tokens })
   } catch (err) {
     autoRunning = false
     $.ui.log(`stint: auto-pit failed: ${String(err)}`, { to: 'debug' })
+  }
+}
+
+// Ceiling trigger: runs right after a main-loop turn (deferred by the hook). A skip is final until the next turn end: no timer, no retry.
+async function ceilingPit($: EngineInterface) {
+  try {
+    let tokens: number | null = null
+    let win: number | null = null
+    try {
+      const { context } = await $.session.usage()
+      tokens = context.tokens ?? null
+      win = context.window
+    } catch {
+      tokens = null
+    }
+    const mode = await modeNow($)
+    // Read at call time: a prompt typed while the draft or the agents were being read must still skip.
+    const gate = (draft: string | null, busy: number | null): CeilingGate => ({ mode, saving, turnRunning, tokens, window: win, draft, busyAgents: busy })
+    let why = ceilingSkip(gate('', 0))
+    if (why === CEILING_BELOW) return
+    if (why === null) {
+      let draft: string | null = null
+      try {
+        draft = (await $.prompt.read()).text
+      } catch {
+        draft = null
+      }
+      const busy = draft === '' ? await busyAgents($) : 0
+      why = ceilingSkip(gate(draft, busy))
+    }
+    if (why !== null || tokens === null) {
+      trace($, 'autopit.skip', { why, trigger: 'ceiling' })
+      return
+    }
+    // The idle wait is over for this period: both triggers never fire.
+    cancelAutopit()
+    trace($, 'autopit.fire', { tokens, trigger: 'ceiling' })
+    await runPit($, undefined, { kind: 'ceiling', at: await $.clock.now(), tokens })
+  } catch (err) {
+    autoRunning = false
+    $.ui.log(`stint: ceiling auto-pit failed: ${String(err)}`, { to: 'debug' })
+  }
+}
+
+const IDLE_COMPACTION_TOAST = 'idleCompaction is on: it overlaps the auto-pit idle trigger; /config to turn it off'
+
+// Startup notice only: shown when the host's own idle compaction row exists and is on. Row absent, off or unreadable = nothing. Read-only: no host key is ever written.
+async function idleCompactionNotice($: EngineInterface) {
+  try {
+    if (autopitDelayMs(await modeNow($)) === null) return
+    const row = (await $.config.list()).find(r => r.key === 'idleCompaction' || /idle compaction/i.test(String(r.label ?? '')))
+    if (row?.value === true) $.ui.toast(IDLE_COMPACTION_TOAST)
+  } catch {
+    // unreadable: show nothing
   }
 }
 
@@ -777,14 +943,15 @@ async function pit($: EngineInterface, args: string) {
   const parsed = parseArgs(args, 'pit')
   if ('error' in parsed) return { text: `pit: ${parsed.error}` }
   if (saving) return { text: `pit: a pit is already running, its outcome will show in the status line` }
-  return runPit($, parsed.stream)
+  return runPit($, parsed.stream, undefined, parsed.save === true)
 }
 
 // The pit proper, shared by /pit and the idle trigger (`auto`: the mark the fresh session shows).
-async function runPit($: EngineInterface, argStream: string | undefined, auto?: AutoMark) {
+// `save` (/pit --save): the same fork, notes and archive, then stop: no pending, no /clear, no lap change, the context is untouched.
+async function runPit($: EngineInterface, argStream: string | undefined, auto?: AutoMark, save = false) {
   const cwd = await rootNow($)
   const room = await headroom($)
-  trace($, 'pit.start', { cwd: await $.session.cwd(), root: cwd, headroom: room, ...(auto ? { auto: true } : {}) }, current())
+  trace($, 'pit.start', { cwd: await $.session.cwd(), root: cwd, headroom: room, ...(auto ? { auto: true } : {}), ...(save ? { save: true } : {}) }, current())
   if (room && overWall(room.tokens, room.wall)) {
     const pct = Math.round((room.tokens / room.wall) * 100)
     const text = `pit: context is at ${pct}% of the limit where the host compacts on its own (${room.tokens} of ${room.wall} tokens); the save runs in this context and would fail there. Nothing saved, the session is unchanged.`
@@ -799,13 +966,15 @@ async function runPit($: EngineInterface, argStream: string | undefined, auto?: 
   hint = undefined
   const stream = current()
 
+  // Two saves never overlap (a --save and an auto-pit that both passed their checks before either set the flag): the second leaves at once.
+  if (saving) return { text: `pit: a pit is already running, its outcome will show in the status line` }
   saving = true
   autoAborted = false
   autoRunning = auto !== undefined
-  startProgress($, `Pitting stream "${stream}"`, stream)
+  startProgress($, `${save ? 'Saving' : 'Pitting'} stream "${stream}"`, stream)
   let built: Built
   try {
-    built = await buildNotes($, cwd, stream)
+    built = await buildNotes($, cwd, stream, save)
   } finally {
     saving = false
   }
@@ -819,12 +988,16 @@ async function runPit($: EngineInterface, argStream: string | undefined, auto?: 
   if (built.kind === 'blocked') {
     autoRunning = false
     // Rail 1: nothing is cleared, the session stays as it is.
-    fail($, `Pit of stream "${stream}" failed: ${built.reason.replace(/\.$/, '')}. Session kept.`, 'PIT FAILED, session kept')
+    fail($, `${save ? 'Save' : 'Pit'} of stream "${stream}" failed: ${built.reason.replace(/\.$/, '')}. Session kept.`, save ? 'SAVE FAILED, session kept' : 'PIT FAILED, session kept')
     return { text: `pit: could not save stream "${stream}": ${built.reason.replace(/\.$/, '')}. No /clear run, the session is unchanged.` }
   }
 
   trace($, 'notes.written', { path: `${cwd}/${NOTES_DIR}/${stream}-notes.md`, chars: built.state.length }, stream)
-  pending = { text: built.state, createdAt: await $.clock.now(), root: cwd, stream, ...(debugOn() ? { sid: await sidNow($) } : {}), ...(auto ? { auto } : {}) }
+  if (save) {
+    await savedOnly($, stream, built)
+    return { text: `pit: saved ${NOTES_DIR}/${stream}-notes.md (no clear)${built.warn ? `\n${built.warn}` : ''}` }
+  }
+  pending = { text: built.state, createdAt: await $.clock.now(), root: cwd, stream, ...(debugOn() ? { sid: await sidNow($) } : {}), ...(auto ? { auto } : {}), ...(auto && built.warn ? { warn: built.warn } : {}) }
   try {
     await persist($)
     trace($, 'pending.persisted', { ok: true }, stream)
@@ -858,7 +1031,7 @@ async function runPit($: EngineInterface, argStream: string | undefined, auto?: 
       },
     )
   })
-  return { text: `pit: saved ${NOTES_DIR}/${stream}-notes.md` }
+  return { text: `pit: saved ${NOTES_DIR}/${stream}-notes.md${!auto && built.warn ? `\n${built.warn}` : ''}` }
 }
 
 async function rejoin($: EngineInterface, args: string) {
@@ -889,6 +1062,7 @@ async function rejoin($: EngineInterface, args: string) {
 
   boundArg = chosen
   hint = undefined
+  seenNotes.set(notesPath(cwd, chosen), notes)
   await setLap($, stintOf(notes))
   paint($)
   inject($, chosen, notes, true)
@@ -913,11 +1087,7 @@ async function noteTitle(title: string | undefined) {
 
 export function registerPit(on: On) {
   on('session.start', async ($, e, next) => {
-    const commands = [
-      { name: 'pit', description: 'Save the notes of a stream, then continue it in a fresh session', argumentHint: '[stream]' },
-      { name: 'rejoin', description: 'Load the notes of a stream as the first message of this session', argumentHint: '[stream]' },
-    ]
-    for (const command of commands) {
+    for (const command of COMMANDS) {
       try {
         await $.command.register(command)
       } catch (err) {
@@ -935,8 +1105,12 @@ export function registerPit(on: On) {
       try {
         turnRunning = false
         lastTurnAt = await $.clock.now()
+        // The ready turn of an auto-pit never re-triggers: neither the idle wait nor the ceiling.
         if (skipNextArm) skipNextArm = false
-        else await armAutopit($)
+        else {
+          await armAutopit($)
+          if (autopitDelayMs(await modeNow($)) !== null) $.clock.after(1, () => void ceilingPit($))
+        }
       } catch (err) {
         $.ui.log(`stint: auto-pit not armed: ${String(err)}`, { to: 'debug' })
       }
@@ -1005,6 +1179,7 @@ export function registerPit(on: On) {
         stopProgress()
         flowLine = undefined
         lastPersist = null
+        seenNotes.clear()
         stopWatch()
       }
       await noteTitle(e.session_title)
@@ -1013,6 +1188,7 @@ export function registerPit(on: On) {
         if (streams.length > 0) hint = { status: hintText(streams), board: hintBoard(streams) }
       }
       paint($)
+      if (e.source === 'startup' || e.source === 'resume') await idleCompactionNotice($)
       return next(e)
     }
 
@@ -1036,7 +1212,7 @@ export function registerPit(on: On) {
     // Rail 3: the binding survives /clear; restore it when a mod reload lost it.
     if (boundArg === null) boundArg = armed.stream
     if (armed.auto) skipNextArm = true
-    inject($, armed.stream, armed.text, false, armed.auto ? autoLine(armed.auto, `${NOTES_DIR}/${armed.stream}-notes.md`) : undefined)
+    inject($, armed.stream, armed.text, false, armed.auto ? { line: autoLine(armed.auto, `${NOTES_DIR}/${armed.stream}-notes.md`), kind: armed.auto.kind === 'ceiling' ? 'ceiling' : 'idle', warn: armed.warn } : undefined)
     $.ui.toast(`Fresh session started with the notes of stream "${armed.stream}"`)
     return next(e)
   }).catch(($, e, next) => {
