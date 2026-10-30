@@ -2041,3 +2041,220 @@ test('wait: a release does not also fire the ceiling trigger: one pit only', asy
   expect(w.forkPrompts).toHaveLength(1)
   expect(w.store.get('stint:pending')).not.toHaveProperty('auto')
 })
+
+// ---------- wait re-check: the finished agent is still listed busy at the turn end that reports it ----------
+// The re-check beats every 2 s, 30 times at most (RECHECK_MS, RECHECK_TICKS in hooks/pit.ts).
+
+const RECHECK_BEAT = 2_000
+const RECHECK_BOUND = 30 * RECHECK_BEAT
+
+test('re-check: a queued /pit whose agent is still listed busy at the turn end runs once the list empties, with no further turn end', async ($, on) => {
+  const w = world(on, OK())
+  w.agents = [BUSY]
+  await fresh($)
+  await pit($)
+  await turnDone($)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(0)
+  expect(lastStatus(w)).toBe(WAIT_ONE)
+  // still busy 1 s later: nothing yet
+  await w.clock.advance(1_000)
+  expect(w.forkPrompts).toHaveLength(0)
+  // the list catches up 3 s after the turn end; the next beat releases
+  w.agents = []
+  await w.clock.advance(3_000)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(1)
+  expect(w.files.get(NOTES)).toContain('stream: proj')
+  await w.clock.advance(5)
+  expect(w.clears).toBe(1)
+  // no second pit from the loop
+  await w.clock.advance(RECHECK_BOUND)
+  expect(w.forkPrompts).toHaveLength(1)
+})
+
+test('re-check: a finished agent that stays listed with a done status after 6 s is not busy: the queued /pit runs', async ($, on) => {
+  const w = world(on, OK())
+  w.agents = [BUSY]
+  await fresh($)
+  await pit($)
+  await turnDone($)
+  await w.clock.advance(5_000)
+  expect(w.forkPrompts).toHaveLength(0)
+  w.agents = [{ ...BUSY, status: 'completed' }]
+  await w.clock.advance(1_000)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(1)
+})
+
+test('re-check: the idle wait is released the same way', async ($, on) => {
+  const w = await idleWaiting($, on)
+  await turnDone($)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(0)
+  expect(lastStatus(w)).toBe(WAIT_IDLE)
+  await w.clock.advance(2_000)
+  expect(w.forkPrompts).toHaveLength(0)
+  w.agents = []
+  await w.clock.advance(2_000)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(1)
+  expect(w.store.get('stint:pending')).toMatchObject({ stream: 'proj', auto: { kind: 'idle' } })
+  await w.clock.advance(5)
+  expect(w.clears).toBe(1)
+  await w.clock.advance(IDLE_MS * 2)
+  expect(w.forkPrompts).toHaveLength(1)
+})
+
+test('re-check: the loop is bounded (60 s): an agent busy all along keeps the wait queued, the loop gives up, the next turn end still releases', async ($, on) => {
+  const w = world(on, OK())
+  w.agents = [BUSY]
+  await fresh($)
+  await pit($)
+  await turnDone($)
+  await w.clock.advance(RECHECK_BOUND + RECHECK_BEAT)
+  expect(w.forkPrompts).toHaveLength(0)
+  expect(lastStatus(w)).toBe(WAIT_ONE)
+  // the loop is over: an empty list is no longer read until a turn end
+  w.agents = []
+  await w.clock.advance(RECHECK_BOUND)
+  expect(w.forkPrompts).toHaveLength(0)
+  expect(lastStatus(w)).toBe(WAIT_ONE)
+  await turnDone($)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(1)
+})
+
+test('re-check: an agent that frees up just inside the bound still releases', async ($, on) => {
+  const w = world(on, OK())
+  w.agents = [BUSY]
+  await fresh($)
+  await pit($)
+  await turnDone($)
+  await w.clock.advance(RECHECK_BOUND - 3 * RECHECK_BEAT)
+  expect(w.forkPrompts).toHaveLength(0)
+  w.agents = []
+  await w.clock.advance(RECHECK_BEAT)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(1)
+})
+
+test('re-check: an unreadable list keeps the wait, with the same bound; the next readable turn end releases', async ($, on) => {
+  const w = world(on, OK())
+  w.agents = [BUSY]
+  await fresh($)
+  await pit($)
+  w.agentsDown = true
+  await turnDone($)
+  await w.clock.advance(RECHECK_BOUND + RECHECK_BEAT)
+  expect(w.forkPrompts).toHaveLength(0)
+  w.agentsDown = false
+  w.agents = []
+  await w.clock.advance(RECHECK_BOUND)
+  expect(w.forkPrompts).toHaveLength(0)
+  await turnDone($)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(1)
+})
+
+test('re-check: a prompt of the person cancels the queued /pit and its loop', async ($, on) => {
+  const w = world(on, OK())
+  w.agents = [BUSY]
+  await fresh($)
+  await pit($)
+  await turnDone($)
+  await typed($)
+  expect(lastStatus(w)).not.toBe(WAIT_ONE)
+  w.agents = []
+  await w.clock.advance(RECHECK_BEAT * 3)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(0)
+})
+
+test('re-check: a turn starting (the host\'s own prompt) ends the loop, the wait stays: the loop does not release mid-turn, the turn end does', async ($, on) => {
+  const w = world(on, OK())
+  w.agents = [BUSY]
+  await fresh($)
+  await pit($)
+  await turnDone($)
+  await submitOf($, 'agent a9 finished', { source: 'system' })
+  expect(lastStatus(w)).toBe(WAIT_ONE)
+  w.agents = []
+  await w.clock.advance(RECHECK_BEAT * 3)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(0)
+  expect(lastStatus(w)).toBe(WAIT_ONE)
+  await turnDone($)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(1)
+})
+
+test('re-check: /clear cancels the idle wait and its loop', async ($, on) => {
+  const w = await idleWaiting($, on)
+  await turnDone($)
+  await clear($)
+  w.agents = []
+  await w.clock.advance(RECHECK_BEAT * 3)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(0)
+})
+
+test('re-check: the setting going off cancels the idle wait and its loop', async ($, on) => {
+  const w = await idleWaiting($, on)
+  await turnDone($)
+  w.mode = 'off'
+  await setAutopit($, 'off')
+  w.agents = []
+  await w.clock.advance(RECHECK_BEAT * 3)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(0)
+})
+
+test('re-check: two turn ends do not stack two loops: one pit only', async ($, on) => {
+  const w = world(on, OK())
+  w.agents = [BUSY]
+  await fresh($)
+  await pit($)
+  await turnDone($)
+  await w.clock.advance(RECHECK_BEAT + 500)
+  await turnDone($)
+  await w.clock.advance(500)
+  w.agents = []
+  await w.clock.advance(RECHECK_BEAT * 4)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(1)
+  await w.clock.advance(5)
+  expect(w.clears).toBe(1)
+})
+
+test('re-check: a draft at the release drops the queued /pit with a toast, as at a turn end', async ($, on) => {
+  const w = world(on, OK())
+  w.agents = [BUSY]
+  await fresh($)
+  await pit($)
+  await turnDone($)
+  w.agents = []
+  w.draft = 'half a sentence'
+  await w.clock.advance(RECHECK_BEAT)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(0)
+  expect(w.toasts.some(t => t.includes('a draft is in the prompt box'))).toBe(true)
+})
+
+test('re-check: debug on traces the start and the stop with the tick count, the busy count and id:status of the listed agents', { ...DEBUG }, async ($, on) => {
+  const w = world(on, OK())
+  w.agents = [BUSY]
+  await fresh($)
+  await pit($)
+  await turnDone($)
+  w.agents = []
+  await w.clock.advance(RECHECK_BEAT)
+  await w.clock.advance(5)
+  const evs = await traced(w)
+  const start = evs.find(e => e.ev === 'wait.recheck.start')
+  expect(start?.detail).toMatchObject({ n: 1, agents: ['a9:running'], everyMs: RECHECK_BEAT, max: 30 })
+  const stop = evs.find(e => e.ev === 'wait.recheck.stop')
+  expect(stop?.detail).toMatchObject({ why: 'wait ended', ticks: 1, n: 0, agents: [] })
+  // metadata only: no agent name or description
+  expect(JSON.stringify(evs)).not.toContain('builder')
+})

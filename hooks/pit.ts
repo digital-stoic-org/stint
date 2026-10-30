@@ -25,6 +25,9 @@ export const RESERVED = ['pit', 'rejoin']
 // $.agent.list() is raced against this: a hang would leave a pit stuck without a word.
 const AGENT_LIST_MS = 5_000
 const ERROR_TOAST_MS = 12_000
+// A finished agent can still be listed busy at the turn end that reports it, and its task notification raises no further turn end: a queued wait re-reads the list on this beat, up to this many beats, then gives up until the next turn end.
+const RECHECK_MS = 2_000
+const RECHECK_TICKS = 30
 // A flow line older than this says it may be stuck ($.model.fork cannot be cancelled).
 export const SLOW_MS = 3 * 60 * 1000
 // The fork runs in this very context: at or above this share of the wall (where auto-compaction fires) it would fail there.
@@ -539,10 +542,18 @@ let autoRunning = false
 let autoAborted = false
 // Waits for agents: the idle trigger found agents running at its fire, or /pit was typed with agents running. Both end at the main-loop turn end that finds none busy.
 // Not cleared by cancelAutopit (armAutopit calls it): only a prompt, a new context or the setting going off clears them.
+// A turn end that still lists the just-finished agent busy starts a bounded re-check (recheck), since no further turn end may come to release them.
 let idleWaiting = false
 let manualWait: { stream: string | undefined } | null = null
 // The flow line the waits show (so a running pit's own line is never cleared by mistake).
 let waitLine: Line | undefined
+// The bounded re-check of a queued wait: one loop at most, a new turn end replaces it, dropWaits ends it.
+let recheck: { cancel: () => void } | null = null
+let recheckTicks = 0
+// A tick's list read is in flight: the next tick does not start another.
+let rechecking = false
+// What the last wait read found, for the trace: busy count (null = list unreadable) and `id:status` of every listed agent.
+let lastListed: { n: number | null; agents: string[] } = { n: null, agents: [] }
 
 // pit's own lines (flow, outcome, hint) come first; with none, the dash line (status.ts).
 function paint($: EngineInterface) {
@@ -586,9 +597,41 @@ function showWait($: EngineInterface, text: string) {
 function dropWaits($: EngineInterface, idleOnly = false) {
   idleWaiting = false
   if (!idleOnly) manualWait = null
+  if (manualWait === null) stopRecheck($, 'wait ended')
   if (manualWait !== null || waitLine === undefined) return
   if (flowLine === waitLine) flowStatus($, undefined)
   waitLine = undefined
+}
+
+function stopRecheck($: EngineInterface, why: string) {
+  if (recheck === null) return
+  recheck.cancel()
+  recheck = null
+  trace($, 'wait.recheck.stop', { why, ticks: recheckTicks, n: lastListed.n, agents: lastListed.agents })
+}
+
+// Replaces any running loop. Each tick: no wait queued or a turn running ends it (that turn reaches turn.complete itself), else the same release as at the turn end; a released wait ends it through dropWaits.
+function startRecheck($: EngineInterface) {
+  stopRecheck($, 'restart')
+  recheckTicks = 0
+  rechecking = false
+  trace($, 'wait.recheck.start', { everyMs: RECHECK_MS, max: RECHECK_TICKS, n: lastListed.n, agents: lastListed.agents })
+  const handle = $.clock.every(RECHECK_MS, () => {
+    if (recheck !== handle || rechecking) return
+    if (manualWait === null && !idleWaiting) return stopRecheck($, 'no wait queued')
+    if (turnRunning) return stopRecheck($, 'turn running')
+    recheckTicks++
+    rechecking = true
+    releaseWait($)
+      .then(released => {
+        if (!released && recheck === handle && recheckTicks >= RECHECK_TICKS) stopRecheck($, 'bound reached')
+      })
+      .catch(err => $.ui.log(`stint: wait re-check failed: ${String(err)}`, { to: 'debug' }))
+      .finally(() => {
+        if (recheck === handle) rechecking = false
+      })
+  })
+  recheck = handle
 }
 
 function fail($: EngineInterface, text: string, board: string) {
@@ -651,8 +694,14 @@ const BUSY_STATUS = ['pending', 'running', 'waiting']
 // Agents (subagents, teammates) at work now; null when the list did not answer.
 // Workflows are NOT in $.agent.list() (index.d.ts:3286 in .claude-plugin/types/claude-code): a running workflow holds no wait. Known gap, accepted.
 async function busyAgents($: EngineInterface): Promise<number | null> {
+  return (await agentsState($)).n
+}
+
+// busyAgents plus `id:status` of every listed agent (no names or descriptions), for the wait trace.
+async function agentsState($: EngineInterface): Promise<{ n: number | null; agents: string[] }> {
   const listed = await listAgents($)
-  return typeof listed === 'string' ? null : listed.filter(a => BUSY_STATUS.includes(a.status)).length
+  if (typeof listed === 'string') return { n: null, agents: [] }
+  return { n: listed.filter(a => BUSY_STATUS.includes(a.status)).length, agents: listed.map(a => `${a.id}:${a.status}`) }
 }
 
 // ---------- save ----------
@@ -1011,15 +1060,19 @@ async function ceilingPit($: EngineInterface) {
 
 // A wait ends at a main-loop turn end that finds no agent busy (a finished agent reports back through a turn). True when it was released here.
 // The pit runs from a timer callback, never inside the hook. An unreadable list keeps the wait.
-async function releaseWait($: EngineInterface): Promise<boolean> {
+// `fromTurnEnd`: a wait kept here starts the re-check (startRecheck), the re-check's own ticks pass false.
+async function releaseWait($: EngineInterface, fromTurnEnd = false): Promise<boolean> {
   const manual = manualWait
   const idle = idleWaiting
   if (manual === null && !idle) return false
-  const n = await busyAgents($)
+  const state = await agentsState($)
+  const n = state.n
+  lastListed = state
   // A prompt or a new context cleared the wait while the list was being read.
   if (manualWait !== manual || idleWaiting !== idle) return false
   if (n === null || n > 0) {
     if (manual !== null && n !== null) showWait($, `pit waits for ${n} agent(s)`)
+    if (fromTurnEnd) startRecheck($)
     return false
   }
   dropWaits($)
@@ -1253,7 +1306,7 @@ export function registerPit(on: On) {
         turnRunning = false
         lastTurnAt = await $.clock.now()
         // A wait for agents ends here when none is busy: that pit saves, so the ceiling is not tried as well.
-        const released = await releaseWait($)
+        const released = await releaseWait($, true)
         // The ready turn of an auto-pit never re-triggers: neither the idle wait nor the ceiling.
         if (skipNextArm) skipNextArm = false
         else {
@@ -1298,6 +1351,8 @@ export function registerPit(on: On) {
   on('classic.UserPromptSubmit', async ($, e, next) => {
     // Any prompt, typed or injected, starts a turn and ends the idle period. One that lands while an auto-pit is saving aborts it before the /clear.
     turnRunning = true
+    // A turn is starting: it reaches turn.complete itself, which restarts the re-check if a wait is still queued.
+    stopRecheck($, 'prompt')
     cancelAutopit($)
     if (autoRunning) autoAborted = true
     // A prompt of the person ends a wait for agents; so does not the host's own (a task notification reports an agent back), nor the /pit command itself (the host may raise this event for it, before or after command.run).
