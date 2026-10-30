@@ -537,6 +537,12 @@ let skipNextArm = false
 // An auto-pit is between its guards and its /clear: a prompt or a turn starting then aborts it.
 let autoRunning = false
 let autoAborted = false
+// Waits for agents: the idle trigger found agents running at its fire, or /pit was typed with agents running. Both end at the main-loop turn end that finds none busy.
+// Not cleared by cancelAutopit (armAutopit calls it): only a prompt, a new context or the setting going off clears them.
+let idleWaiting = false
+let manualWait: { stream: string | undefined } | null = null
+// The flow line the waits show (so a running pit's own line is never cleared by mistake).
+let waitLine: Line | undefined
 
 // pit's own lines (flow, outcome, hint) come first; with none, the dash line (status.ts).
 function paint($: EngineInterface) {
@@ -568,6 +574,21 @@ function startProgress($: EngineInterface, label: string, stream: string) {
 function stopProgress() {
   ticker?.cancel()
   ticker = null
+}
+
+function showWait($: EngineInterface, text: string) {
+  const line: Line = { status: `⏳ ${text}`, board: text }
+  waitLine = line
+  flowStatus($, line)
+}
+
+// `idleOnly`: the setting went off, a queued /pit stays.
+function dropWaits($: EngineInterface, idleOnly = false) {
+  idleWaiting = false
+  if (!idleOnly) manualWait = null
+  if (manualWait !== null || waitLine === undefined) return
+  if (flowLine === waitLine) flowStatus($, undefined)
+  waitLine = undefined
 }
 
 function fail($: EngineInterface, text: string, board: string) {
@@ -628,6 +649,7 @@ async function agentLines($: EngineInterface): Promise<string[]> {
 const BUSY_STATUS = ['pending', 'running', 'waiting']
 
 // Agents (subagents, teammates) at work now; null when the list did not answer.
+// Workflows are NOT in $.agent.list() (index.d.ts:3286 in .claude-plugin/types/claude-code): a running workflow holds no wait. Known gap, accepted.
 async function busyAgents($: EngineInterface): Promise<number | null> {
   const listed = await listAgents($)
   return typeof listed === 'string' ? null : listed.filter(a => BUSY_STATUS.includes(a.status)).length
@@ -822,6 +844,8 @@ async function savedOnly($: EngineInterface, stream: string, built: { state: str
     if (outcome !== line) return
     outcome = undefined
     paint($)
+    // A queued wait lost its line to the save's flow reset: it is still waiting.
+    if (waitLine !== undefined && flowLine === undefined && (manualWait !== null || idleWaiting)) flowStatus($, waitLine)
   })
   trace($, 'save.done', { stream })
   turnRunning = false
@@ -832,7 +856,8 @@ async function savedOnly($: EngineInterface, stream: string, built: { state: str
 }
 
 // ---------- auto-pit (idle trigger) ----------
-// Armed at the end of each main-loop turn, cancelled by the next prompt or turn. At the fire every guard of autopitSkip() is read; any miss skips (no postponing).
+// Armed at the end of each main-loop turn, cancelled by the next prompt or turn. At the fire every guard of autopitSkip() is read; any miss skips, except running agents: those make it wait
+// (idleWaiting) until a turn end finds none busy, then it re-runs every guard.
 // The pit itself is runPit(), unchanged. A timer callback is outside any command.run hook, so the host allows the fork, the /clear and the submit from it.
 
 function cancelAutopit($: EngineInterface) {
@@ -918,6 +943,13 @@ async function autoPit($: EngineInterface) {
       const busy = tokens !== null && tokens >= AUTOPIT_MIN_TOKENS && draft === '' ? await busyAgents($) : 0
       why = autopitSkip({ ...base, tokens, draft, busyAgents: busy })
     }
+    if (why === 'agents are running') {
+      // Every other guard held: fire-and-forget, the pit waits for the agents instead of being lost.
+      idleWaiting = true
+      trace($, 'autopit.wait', { why })
+      if (flowLine === undefined) showWait($, 'auto-pit waits for agents')
+      return
+    }
     if (why !== null || tokens === null || lastTurnAt === null) {
       trace($, 'autopit.skip', { why })
       return
@@ -977,6 +1009,49 @@ async function ceilingPit($: EngineInterface) {
   }
 }
 
+// A wait ends at a main-loop turn end that finds no agent busy (a finished agent reports back through a turn). True when it was released here.
+// The pit runs from a timer callback, never inside the hook. An unreadable list keeps the wait.
+async function releaseWait($: EngineInterface): Promise<boolean> {
+  const manual = manualWait
+  const idle = idleWaiting
+  if (manual === null && !idle) return false
+  const n = await busyAgents($)
+  // A prompt or a new context cleared the wait while the list was being read.
+  if (manualWait !== manual || idleWaiting !== idle) return false
+  if (n === null || n > 0) {
+    if (manual !== null && n !== null) showWait($, `pit waits for ${n} agent(s)`)
+    return false
+  }
+  dropWaits($)
+  trace($, 'autopit.release', { trigger: manual !== null ? 'manual' : 'idle' })
+  if (manual !== null) {
+    $.clock.after(1, () => void releaseManual($, manual.stream).catch(err => $.ui.log(`stint: queued pit failed: ${String(err)}`, { to: 'debug' })))
+  } else {
+    // The idle wait of this period is over; autoPit re-reads every guard.
+    $.clock.after(1, () => {
+      cancelAutopit($)
+      void autoPit($)
+    })
+  }
+  return true
+}
+
+// The queued /pit, at the release: a draft that appeared meanwhile would be lost to the /clear, so the wait is dropped instead.
+async function releaseManual($: EngineInterface, stream: string | undefined) {
+  let draft: string | null = null
+  try {
+    draft = (await $.prompt.read()).text
+  } catch {
+    draft = null
+  }
+  if (draft === null || draft.trim() !== '') {
+    trace($, 'pit.wait.drop', { why: draft === null ? 'prompt box unreadable' : 'a draft is in the prompt box' })
+    $.ui.toast(`pit: the agents are done, but ${draft === null ? 'the prompt box is unreadable' : 'a draft is in the prompt box'}: nothing saved. Run /pit again.`)
+    return
+  }
+  await runPit($, stream)
+}
+
 const IDLE_COMPACTION_TOAST = 'idleCompaction is on: it overlaps the auto-pit idle trigger; /config to turn it off'
 
 // Startup notice only: shown when the host's own idle compaction row exists and is on. Row absent, off or unreadable = nothing. Read-only: no host key is ever written.
@@ -997,6 +1072,20 @@ async function pit($: EngineInterface, args: string) {
   const parsed = parseArgs(args, 'pit')
   if ('error' in parsed) return { text: `pit: ${parsed.error}` }
   if (saving) return { text: `pit: a pit is already running, its outcome will show in the status line` }
+  // Fire-and-forget: with agents running the pit is queued and runs at the turn end that finds none busy. --save never waits. An unknown list goes on as before.
+  if (!parsed.save) {
+    const n = await busyAgents($)
+    if (n !== null && n > 0) {
+      // A second /pit is not a force.
+      if (manualWait !== null) return { text: `pit: already waiting for ${n} agent(s)...` }
+      manualWait = { stream: parsed.stream }
+      trace($, 'pit.wait', { agents: n }, parsed.stream)
+      showWait($, `pit waits for ${n} agent(s)`)
+      return { text: `pit: ${n} agent(s) still running. Waiting: the pit runs when they are done.` }
+    }
+    // Nothing busy any more: this pit supersedes a queued one.
+    dropWaits($)
+  }
   return runPit($, parsed.stream, undefined, parsed.save === true)
 }
 
@@ -1163,12 +1252,14 @@ export function registerPit(on: On) {
       try {
         turnRunning = false
         lastTurnAt = await $.clock.now()
+        // A wait for agents ends here when none is busy: that pit saves, so the ceiling is not tried as well.
+        const released = await releaseWait($)
         // The ready turn of an auto-pit never re-triggers: neither the idle wait nor the ceiling.
         if (skipNextArm) skipNextArm = false
         else {
           await armAutopit($)
-          if (autopitDelayMs(await modeNow($)) !== null) $.clock.after(1, () => void ceilingPit($))
-          else await publishAutopit($)
+          if (autopitDelayMs(await modeNow($)) === null || released) await publishAutopit($)
+          else $.clock.after(1, () => void ceilingPit($))
         }
       } catch (err) {
         $.ui.log(`stint: auto-pit not armed: ${String(err)}`, { to: 'debug' })
@@ -1182,8 +1273,10 @@ export function registerPit(on: On) {
     if ('deny' in result && result.deny !== undefined) return result
     autopitMode = String(e.value)
     try {
-      if (autopitDelayMs(autopitMode) === null) cancelAutopit($)
-      else if (lastTurnAt !== null && !turnRunning && !skipNextArm) await armAutopit($, (await $.clock.now()) - lastTurnAt)
+      if (autopitDelayMs(autopitMode) === null) {
+        cancelAutopit($)
+        dropWaits($, true)
+      } else if (lastTurnAt !== null && !turnRunning && !skipNextArm) await armAutopit($, (await $.clock.now()) - lastTurnAt)
       await publishAutopit($)
     } catch (err) {
       $.ui.log(`stint: auto-pit not re-armed: ${String(err)}`, { to: 'debug' })
@@ -1207,6 +1300,8 @@ export function registerPit(on: On) {
     turnRunning = true
     cancelAutopit($)
     if (autoRunning) autoAborted = true
+    // A prompt of the person ends a wait for agents; so does not the host's own (a task notification reports an agent back), nor the /pit command itself (the host may raise this event for it, before or after command.run).
+    if (e.source !== 'system' && !(manualWait !== null && /^\/pit(\s|$)/.test(e.prompt.trim()))) dropWaits($)
     // The hint was seen: it goes at the first prompt.
     if (hint !== undefined) {
       hint = undefined
@@ -1225,6 +1320,7 @@ export function registerPit(on: On) {
     outcome = undefined
     // A new context: no idle period carries over, and the next turn.complete starts a fresh one.
     cancelAutopit($)
+    dropWaits($)
     lastTurnAt = null
     turnRunning = false
     autoRunning = false

@@ -359,6 +359,8 @@ type World = {
   usage: { tokens?: number; wall: number; window?: number } | 'throws'
   clock: { advance: (ms: number) => Promise<void> }
   agents: { id: string; name?: string; description: string; type: string; status: string }[]
+  // $.agent.list() fails: the busy count is unknown
+  agentsDown: boolean
   refuseClear: boolean
   failWrites: boolean
   // writes under .stint/archive/ fail
@@ -386,6 +388,7 @@ function world(on: On, forkText: string | null, now = 1_000_000): World {
     usage: TOKENS,
     clock: { advance: async () => undefined },
     agents: [],
+    agentsDown: false,
     refuseClear: false,
     failWrites: false,
     failArchive: false,
@@ -404,7 +407,10 @@ function world(on: On, forkText: string | null, now = 1_000_000): World {
       value: w.forkText === null ? { isAnswered: false, reason: 'nothing-to-fork' } : { isAnswered: true, text: w.forkText, usage: { input_tokens: 1, output_tokens: 1 } },
     } as never
   })
-  on('agent.list', () => ({ value: w.agents }) as never)
+  on('agent.list', () => {
+    if (w.agentsDown) throw new Error('agent list down')
+    return { value: w.agents } as never
+  })
   on('session.cwd', () => ({ value: w.cwd ?? CWD }))
   on('session.root', () => ({ value: w.root ?? CWD }))
   on('session.id', () => ({ value: 'sess-1' }))
@@ -586,7 +592,8 @@ test('pit: agents in flight are listed in in_progress by code before the fork', 
   const w = world(on, OK())
   w.agents = [{ id: 'a1', name: 'scout', description: 'look around', type: 'Explore', status: 'running' }]
   await fresh($)
-  await pit($)
+  // --save: a plain /pit would wait for the running agent
+  await pit($, 'proj --save')
   expect(section(w.files.get(NOTES) ?? '', 'in_progress')).toEqual(['agent in flight: scout [a1] running — look around', 'parser half done'])
 })
 
@@ -1145,7 +1152,7 @@ test('auto-pit: a subagent turn end does not arm or re-arm; only the main loop d
   expect(w.forkPrompts).toHaveLength(1)
 })
 
-test('auto-pit: skipped, never postponed, when the context is under 80k, a draft is typed, or an agent is running', async ($, on) => {
+test('auto-pit: skipped, never postponed, when the context is under 80k or a draft is typed; running agents make it wait', async ($, on) => {
   const w = await idleWorld($, on)
   w.usage = { tokens: AUTOPIT_MIN_TOKENS - 1, wall: 200_000 }
   await w.clock.advance(IDLE_MS)
@@ -1172,7 +1179,7 @@ test('auto-pit: skipped, never postponed, when the context is under 80k, a draft
   await w.clock.advance(IDLE_MS)
   expect(w.forkPrompts).toHaveLength(0)
 
-  // an idle teammate is not work in progress: it goes in the notes and the pit runs
+  // an idle teammate is not work in progress: it goes in the notes and the pit runs (here it also releases the wait above)
   w.agents = [{ id: 'a9', name: 'builder', description: 'writing', type: 'general-purpose', status: 'idle' }]
   await turnDone($)
   await w.clock.advance(IDLE_MS)
@@ -1771,4 +1778,266 @@ test('/pit --save and auto-pit: an auto-pit that fires during a save skips, and 
   expect(w.forkPrompts).toHaveLength(1)
   expect(w.clears).toBe(0)
   expect(w.store.get('stint:pending')).toBeUndefined()
+})
+
+// ---------- pit waits for agents ----------
+
+const BUSY = { id: 'a9', name: 'builder', description: 'writing', type: 'general-purpose', status: 'running' }
+const WAIT_IDLE = '⏳ auto-pit waits for agents'
+const WAIT_ONE = '⏳ pit waits for 1 agent(s)'
+const submitOf = ($: Engine, prompt: string, extra: Record<string, unknown> = {}) => $.classic.UserPromptSubmit({ prompt, ...extra } as never)
+
+// The idle timer fired with a busy agent.
+async function idleWaiting($: Engine, on: On) {
+  const w = await idleWorld($, on)
+  w.agents = [BUSY]
+  await w.clock.advance(IDLE_MS)
+  return w
+}
+
+test('wait: the idle fire with a running agent does not skip, it waits and shows it; the turn end with no agent pits', async ($, on) => {
+  const w = await idleWaiting($, on)
+  expect(w.forkPrompts).toHaveLength(0)
+  expect(lastStatus(w)).toBe(WAIT_IDLE)
+  expect(await bandNow($)).toContain('auto-pit waits for agents')
+  w.agents = []
+  await turnDone($)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(1)
+  expect(w.store.get('stint:pending')).toMatchObject({ stream: 'proj', auto: { kind: 'idle' } })
+  await w.clock.advance(5)
+  expect(w.clears).toBe(1)
+  // the armed idle timer of that turn end is gone: no second pit later
+  await w.clock.advance(IDLE_MS * 2)
+  expect(w.forkPrompts).toHaveLength(1)
+})
+
+test('wait: a turn end with the agent still busy keeps waiting, the line stays', async ($, on) => {
+  const w = await idleWaiting($, on)
+  await turnDone($)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(0)
+  expect(lastStatus(w)).toBe(WAIT_IDLE)
+  w.agents = []
+  await turnDone($)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(1)
+})
+
+test('wait: the line goes once the pit starts (the pit shows its own flow)', async ($, on) => {
+  const w = await idleWaiting($, on)
+  w.agents = []
+  await turnDone($)
+  await w.clock.advance(5)
+  expect(w.statuses).toContain('Starting a fresh session...')
+})
+
+test('wait: a prompt cancels the idle wait and its line', async ($, on) => {
+  const w = await idleWaiting($, on)
+  await typed($)
+  expect(lastStatus(w)).not.toBe(WAIT_IDLE)
+  w.agents = []
+  await turnDone($)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(0)
+})
+
+test('wait: a prompt of the host itself (a task notification) does not cancel it', async ($, on) => {
+  const w = await idleWaiting($, on)
+  await submitOf($, 'agent a9 finished', { source: 'system' })
+  expect(lastStatus(w)).toBe(WAIT_IDLE)
+  w.agents = []
+  await turnDone($)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(1)
+})
+
+test('wait: /clear (a new context) cancels the idle wait', async ($, on) => {
+  const w = await idleWaiting($, on)
+  await clear($)
+  expect(lastStatus(w)).not.toBe(WAIT_IDLE)
+  w.agents = []
+  await turnDone($)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(0)
+})
+
+test('wait: the setting going off cancels the idle wait', async ($, on) => {
+  const w = await idleWaiting($, on)
+  w.mode = 'off'
+  await setAutopit($, 'off')
+  expect(lastStatus(w)).not.toBe(WAIT_IDLE)
+  w.agents = []
+  await turnDone($)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(0)
+})
+
+test('wait: the idle wait re-reads every guard at the release (a draft skips)', async ($, on) => {
+  const w = await idleWaiting($, on)
+  w.agents = []
+  w.draft = 'half a sentence'
+  await turnDone($)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(0)
+  expect(w.clears).toBe(0)
+})
+
+test('wait: /pit with a running agent is queued, a second /pit is not a force, the turn end with no agent runs it', async ($, on) => {
+  const w = world(on, OK())
+  w.agents = [BUSY]
+  await fresh($)
+  const first = await pit($)
+  expect(first.text).toBe('pit: 1 agent(s) still running. Waiting: the pit runs when they are done.')
+  expect(lastStatus(w)).toBe(WAIT_ONE)
+  expect(await bandNow($)).toContain('pit waits for 1 agent(s)')
+  expect(w.forkPrompts).toHaveLength(0)
+  const second = await pit($)
+  expect(second.text).toBe('pit: already waiting for 1 agent(s)...')
+  expect(w.forkPrompts).toHaveLength(0)
+  // still busy at a turn end: the line stays
+  await turnDone($)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(0)
+  w.agents = []
+  await turnDone($)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(1)
+  expect(w.files.get(NOTES)).toContain('stream: proj')
+  await w.clock.advance(5)
+  expect(w.clears).toBe(1)
+  await clear($)
+  expect(w.submits).toEqual([injectText(w.files.get(NOTES) ?? '')])
+})
+
+test('wait: a queued /pit keeps its stream argument and the session binding', async ($, on) => {
+  const w = world(on, OK())
+  w.agents = [BUSY]
+  await fresh($)
+  await pit($, 'other')
+  w.agents = []
+  await turnDone($)
+  await w.clock.advance(5)
+  expect(w.files.has('/work/.stint/other-notes.md')).toBe(true)
+})
+
+test('wait: a prompt cancels a queued /pit', async ($, on) => {
+  const w = world(on, OK())
+  w.agents = [BUSY]
+  await fresh($)
+  await pit($)
+  await typed($)
+  expect(lastStatus(w)).not.toBe(WAIT_ONE)
+  w.agents = []
+  await turnDone($)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(0)
+})
+
+test('wait: /clear cancels a queued /pit', async ($, on) => {
+  const w = world(on, OK())
+  w.agents = [BUSY]
+  await fresh($)
+  await pit($)
+  await clear($)
+  w.agents = []
+  await turnDone($)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(0)
+})
+
+test('wait: the host may raise the prompt event of the /pit command itself, before or after command.run: the queue holds either way', async ($, on) => {
+  const w = world(on, OK())
+  w.agents = [BUSY]
+  await fresh($)
+  // after command.run
+  await pit($)
+  await submitOf($, '/pit proj')
+  expect(lastStatus(w)).toBe(WAIT_ONE)
+  // before command.run: nothing queued yet, then a second /pit is still not a force
+  await submitOf($, '/pit proj')
+  expect((await pit($)).text).toBe('pit: already waiting for 1 agent(s)...')
+  w.agents = []
+  await turnDone($)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(1)
+})
+
+test('wait: /pit --save with a running agent runs now, and leaves a queued /pit queued', async ($, on) => {
+  const w = world(on, OK())
+  w.agents = [BUSY]
+  await fresh($)
+  const saved = await pit($, 'proj --save')
+  expect(saved.text).toBe('pit: saved .stint/proj-notes.md (no clear)')
+  expect(w.forkPrompts).toHaveLength(1)
+  await pit($)
+  await pit($, 'proj --save')
+  expect(w.forkPrompts).toHaveLength(2)
+  expect(w.clears).toBe(0)
+  // the save's own flow reset took the line; it comes back once the save's outcome is gone
+  await w.clock.advance(3000)
+  expect(lastStatus(w)).toBe(WAIT_ONE)
+  w.agents = []
+  await turnDone($)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(3)
+})
+
+test('wait: an unknown agent list does not wait, /pit goes on as before', async ($, on) => {
+  const w = world(on, OK())
+  w.agentsDown = true
+  await fresh($)
+  const out = await pit($)
+  expect(out.text).toBe('pit: saved .stint/proj-notes.md')
+  await w.clock.advance(5)
+  expect(w.clears).toBe(1)
+})
+
+test('wait: agents gone when /pit is typed: it pits now', async ($, on) => {
+  const w = world(on, OK())
+  await fresh($)
+  const out = await pit($)
+  expect(out.text).toBe('pit: saved .stint/proj-notes.md')
+})
+
+test('wait: a draft at the release drops the queued /pit with a toast, nothing saved; an unreadable box too', async ($, on) => {
+  const w = world(on, OK())
+  w.agents = [BUSY]
+  await fresh($)
+  await pit($)
+  w.agents = []
+  w.draft = 'half a sentence'
+  await turnDone($)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(0)
+  expect(w.clears).toBe(0)
+  expect(w.toasts.some(t => t.includes('a draft is in the prompt box'))).toBe(true)
+  expect(lastStatus(w)).not.toBe(WAIT_ONE)
+  // dropped: a later turn end does not run it
+  w.draft = ''
+  await turnDone($)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(0)
+
+  w.agents = [BUSY]
+  await pit($)
+  w.agents = []
+  w.draft = null
+  await turnDone($)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(0)
+  expect(w.toasts.some(t => t.includes('prompt box is unreadable'))).toBe(true)
+})
+
+test('wait: a release does not also fire the ceiling trigger: one pit only', async ($, on) => {
+  const w = await ceilWorld($, on)
+  w.agents = [BUSY]
+  await pit($)
+  expect(w.forkPrompts).toHaveLength(0)
+  w.agents = []
+  await turnDone($)
+  await w.clock.advance(5)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(1)
+  expect(w.store.get('stint:pending')).not.toHaveProperty('auto')
 })

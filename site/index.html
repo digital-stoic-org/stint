@@ -8,16 +8,16 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <style>html,body{background:#f4ecd8}</style>
   <title>stint · Run your agent in stints</title>
-  <meta name="description" content="Keep your Claude Code session under control: watch the context fill up, pit before it drifts, rejoin from the notes.">
+  <meta name="description" content="Keep your Claude Code session under control: watch the context fill up, pit at a clean break, rejoin from the notes.">
   <link rel="canonical" href="https://stint.digitalstoic.net/">
   <meta property="og:type" content="website">
   <meta property="og:title" content="stint · Run your agent in stints">
-  <meta property="og:description" content="Keep your Claude Code session under control: watch the context fill up, pit before it drifts, rejoin from the notes.">
+  <meta property="og:description" content="Keep your Claude Code session under control: watch the context fill up, pit at a clean break, rejoin from the notes.">
   <meta property="og:url" content="https://stint.digitalstoic.net/">
   <meta property="og:image" content="https://stint.digitalstoic.net/og.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="stint: Keep your Claude Code session under control: watch the context fill up, pit before it drifts, rejoin from the notes.">
+  <meta property="og:image:alt" content="stint: Keep your Claude Code session under control: watch the context fill up, pit at a clean break, rejoin from the notes.">
   <meta property="og:site_name" content="stint">
   <meta name="twitter:card" content="summary_large_image">
 </head>
@@ -177,6 +177,8 @@
 #v3 .steps li:nth-child(2) .no{border-radius:46% 54% 48% 52%/54% 46% 52% 48%}
 #v3 .steps h3{font-family:var(--slab);font-size:1.4rem;line-height:1.2;margin:2px 0 6px}
 #v3 .steps p{margin:0;max-width:36em}
+#v3 .steps p a{color:var(--signal);font-weight:700;text-decoration:underline;text-underline-offset:3px}
+#v3 .steps p a:focus-visible{outline:3px solid var(--signal);outline-offset:3px}
 #v3 .steps code{font:600 .92em var(--mono);background:var(--ink);color:var(--paper);padding:1px 6px}
 #v3 .steps .hand{display:block;margin-top:6px;font-size:1.1rem;transform:rotate(-1.5deg);transform-origin:left}
 #v3 .spec{border:2px solid var(--graphite);background:var(--card);box-shadow:4px 5px 0 var(--shadow-1);transform:rotate(.6deg)}
@@ -391,8 +393,8 @@
     <div class="stage">
       <div class="copy">
         <p class="kicker">Your <s>race car</s> <span class="agent-name">Claude Code</span> agent.</p>
-        <h1>Revs climb every lap. <em>Pit before the redline.</em></h1>
-        <p class="sub">Keep your Claude Code session under control: watch the <span class="kw">context</span> fill up, <span class="kw">pit</span> before it drifts, rejoin from the <span class="kw">notes</span>.</p>
+        <h1>Revs climb every lap. <em>Pit at a clean break.</em></h1>
+        <p class="sub">Keep your Claude Code session under control: watch the <span class="kw">context</span> fill up, <span class="kw">pit</span> at a clean break, rejoin from the <span class="kw">notes</span>.</p>
         <a class="install-link" href="#v3-install">Install &#8595;</a>
       </div>
 
@@ -537,11 +539,12 @@
   <div class="wrap">
     <h2>Sounds familiar?</h2>
     <ul class="sym-grid">
-      <li class="sym-card"><span class="tag">Symptom 1</span><p>It forgets what you decided at lap 3.</p></li>
-      <li class="sym-card"><span class="tag">Symptom 2</span><p><code>/compact</code> kept the wrong half.</p></li>
+      <li class="sym-card"><span class="tag">Symptom 1</span><p>At the first summary, about 1 in 3 anti-cheating rules is lost, and more go with each later compaction.</p></li>
+      <li class="sym-card"><span class="tag">Symptom 2</span><p>Instructions on how to work are lost about six times more often than what to build.</p></li>
       <li class="sym-card"><span class="tag">Symptom 3</span><p>Tomorrow you re-explain it all.</p></li>
     </ul>
-    <p class="sym-line">Cause: the context window fills up. Fix: <a href="why-pit.html">pit before the redline &rarr;</a></p>
+    <p class="req">Sources: Salle 2026. ProgramBench for the 1-in-3 figure, SWE-chat for the 6x figure.</p>
+    <p class="sym-line">Cause: a summary can drop rules that exist only in the conversation. Fix: <a href="why-pit.html">pit writes them to disk first &rarr;</a></p>
   </div>
 </div>
 
@@ -558,12 +561,12 @@
         <div class="piece p3"><span class="badge">3</span><span>🏁 <span class="stint">2</span></span></div>
         <div class="piece p4"><span class="badge">4</span><span>📋</span><span class="board">—</span></div>
 
-        <div class="callout c1"><svg viewBox="0 0 28 48" aria-hidden="true"><g filter="url(#v3-wobble-s)"><path d="M10 46 C4 34 20 24 14 8"/><path d="M7 15 L14 6 L21 14"/></g></svg><div class="t"><b><span class="n">1</span>zone emoji</b>Your zone: 🚀 under 40%, 🔥 from 40%, 🚨 from 60%.</div></div>
+        <div class="callout c1"><svg viewBox="0 0 28 48" aria-hidden="true"><g filter="url(#v3-wobble-s)"><path d="M10 46 C4 34 20 24 14 8"/><path d="M7 15 L14 6 L21 14"/></g></svg><div class="t"><b><span class="n">1</span>zone emoji</b>Your zone: 🚀 under 80k, 🔥 from 80k, 🔶 from 60% of the window, 🚨 near the auto-pit ceiling.</div></div>
         <div class="callout c2"><svg viewBox="0 0 28 48" aria-hidden="true"><g filter="url(#v3-wobble-s)"><path d="M10 46 C4 34 20 24 14 8"/><path d="M7 15 L14 6 L21 14"/></g></svg><div class="t"><b><span class="n">2</span>revs</b>How full the context window is, one cell per 10%. The ↑ is the last rise.</div></div>
         <div class="callout c3"><svg viewBox="0 0 28 48" aria-hidden="true"><g filter="url(#v3-wobble-s)"><path d="M10 46 C4 34 20 24 14 8"/><path d="M7 15 L14 6 L21 14"/></g></svg><div class="t"><b><span class="n">3</span>🏁 stint</b>Your stint count. It appears from the second stint.</div></div>
-        <div class="callout c4"><svg viewBox="0 0 28 48" aria-hidden="true"><g filter="url(#v3-wobble-s)"><path d="M10 46 C4 34 20 24 14 8"/><path d="M7 15 L14 6 L21 14"/></g></svg><div class="t"><b><span class="n">4</span>📋 pit board</b>A short message from stint. A dash when it has nothing to say.</div></div>
+        <div class="callout c4"><svg viewBox="0 0 28 48" aria-hidden="true"><g filter="url(#v3-wobble-s)"><path d="M10 46 C4 34 20 24 14 8"/><path d="M7 15 L14 6 L21 14"/></g></svg><div class="t"><b><span class="n">4</span>📋 pit board</b>A short message from stint, such as <code>⏸ auto-pit 14:32</code> when the session sits idle. A dash when it has nothing to say.</div></div>
       </div>
-      <p class="fig-note hand">watch the revs, not the clock &#8599;</p>
+      <p class="fig-note hand">watch the revs, and the idle countdown on the board &#8599;</p>
     </div>
   </div>
 </div>
@@ -577,7 +580,7 @@
           <span class="no">1</span>
           <div>
             <h3>Watch the revs.</h3>
-            <p>A band above your prompt shows how full the context window is. At 80k tokens it turns 🔥: plan your pit. At 120k, 🚨: box this lap.</p>
+            <p>A band above your prompt shows how full the context window is. At 80k tokens it turns 🔥: auto-pit armed. At 60% of the window, 🔶: box this lap. Near the auto-pit ceiling, 🚨: it pits for you.</p>
             <span class="hand">eyes on the band</span>
           </div>
         </li>
@@ -585,29 +588,32 @@
           <span class="no">2</span>
           <div>
             <h3>Pit.</h3>
-            <p><code>/pit</code>: the agent writes its notes, the context clears itself, and the notes come back as the first message of a fresh window. Driver change, same race.</p>
-            <span class="hand">one command, no tools needed</span>
+            <p><code>/pit</code>: the agent writes its notes, the context clears itself, and the notes come back as the first message of a fresh window. Driver change, same race. <code>/pit --save</code> saves without clearing, archives the previous notes in <code>.stint/archive/</code>, and warns if another session rewrote them. Auto-pit does the same by itself when the session sits idle, or when the context reaches its ceiling.</p>
           </div>
         </li>
         <li>
           <span class="no">3</span>
           <div>
             <h3>Rejoin.</h3>
-            <p><code>/rejoin</code>: next morning, new session, same stream. The notes go in first.</p>
+            <p><code>/rejoin</code>: next morning, new session, same stream. The notes go in first. Resuming after the prompt cache has expired re-sends the whole context. On a subscription, the idle auto-pit pits before that happens (<a href="why-pit.html">details &rarr;</a>).</p>
             <span class="hand">pick up where you left off</span>
           </div>
         </li>
       </ol>
 
+      <div>
       <table class="spec">
         <caption>Spec · zones</caption>
         <thead><tr><th>Zone</th><th>From</th><th>Do</th></tr></thead>
         <tbody>
-          <tr><td class="m">🚀</td><td class="m">under 40%</td><td>Keep driving.</td></tr>
-          <tr><td class="m">🔥</td><td class="m">40% · 80k</td><td>Plan your pit.</td></tr>
-          <tr><td class="m">🚨</td><td class="m">60% · 120k</td><td>Box this lap: <span style="font-family:var(--mono);font-weight:600">/pit</span></td></tr>
+          <tr><td class="m">🚀</td><td class="m">under 80k</td><td>Keep driving.</td></tr>
+          <tr><td class="m">🔥</td><td class="m">80k</td><td>auto-pit armed</td></tr>
+          <tr><td class="m">🔶</td><td class="m">60% of window</td><td>box this lap: <span style="font-family:var(--mono);font-weight:600">/pit</span> or <span style="font-family:var(--mono);font-weight:600">--save</span></td></tr>
+          <tr><td class="m">🚨</td><td class="m">ceiling − 10 pts</td><td>auto-pit at N%</td></tr>
         </tbody>
       </table>
+      <p class="req">Zones are rules of thumb (Horthy 2025). On a window under 200k, 🔥 starts earlier than 80k. The ceiling (N) depends on your window, and 🚨 shows only while auto-pit is on.</p>
+      </div>
     </div>
   </div>
 </div>
@@ -622,7 +628,7 @@
       <div class="cmd"><code>/plugin install stint@pitlane</code><button type="button" class="copy-btn" aria-label="Copy command" title="Copy"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><g class="i-copy"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></g><path class="i-check" d="M4 12.5l5 5L20 6.5"/></svg></button></div>
       <span class="sr" role="status" aria-live="polite"></span>
     </div>
-    <p class="req">Requires Claude Code 2.1.311+. <a href="https://github.com/digital-stoic-org/stint">github.com/digital-stoic-org/stint</a></p>
+    <p class="req">Requires Claude Code. <a href="https://github.com/digital-stoic-org/stint">github.com/digital-stoic-org/stint</a></p>
   </div>
 </div>
 
@@ -634,8 +640,8 @@
       <thead><tr><th>Term</th><th>On track</th><th>In stint</th></tr></thead>
       <tbody>
         <tr><td class="m">revs</td><td class="t1" data-label="On track">Engine revolutions per minute: how hard the engine works.</td><td data-label="In stint">How full the context window is, shown in the band.</td></tr>
-        <tr><td class="m">redline</td><td class="t1" data-label="On track">The top of the rev counter, where engines break.</td><td data-label="In stint">Where the agent starts to lose the thread. The band turns 🚨 before it.</td></tr>
-        <tr><td class="m">lap</td><td class="t1" data-label="On track">One turn of the circuit.</td><td data-label="In stint">One tool call, its result, and the agent's reasoning.</td></tr>
+        <tr><td class="m">redline</td><td class="t1" data-label="On track">The top of the rev counter, where engines break.</td><td data-label="In stint">The auto-pit ceiling: when the context reaches it, stint pits for you. The band turns 🚨 just before.</td></tr>
+        <tr><td class="m">lap</td><td class="t1" data-label="On track">One turn of the circuit.</td><td data-label="In stint">One call to the model.</td></tr>
         <tr><td class="m">stint</td><td class="t1" data-label="On track">The run between two pit stops.</td><td data-label="In stint">One context window, from fresh to pit.</td></tr>
         <tr><td class="m">box / pit</td><td class="t1" data-label="On track">The radio call to come in, then the stop.</td><td data-label="In stint"><code>/pit</code> writes the notes and clears the window.</td></tr>
         <tr><td class="m">driver change</td><td class="t1" data-label="On track">A fresh driver, same car, same race.</td><td data-label="In stint">A fresh window that starts from the notes.</td></tr>
@@ -653,7 +659,6 @@
     <div class="road-r">
       <ul class="road-list">
         <li><code>checkpoint</code> Logs the moments that matter, builds notes</li>
-        <li><code>auto pit</code> Pits by itself at the redline</li>
         <li><code>radio</code> Warns the model as context climbs</li>
         <li><code>team</code> Agent teams, run like a pit crew</li>
       </ul>
@@ -702,7 +707,8 @@
   var L=trace.getTotalLength(), PL=pitl.getTotalLength();
   var LAP=1700, GAP=380, PIT_DRAW=1100, PIT_HOLD=500;
   var BASE=7, AFTER=7;
-  var deltas=[4,5,6,5,7,6,5,6,4,5];
+  var deltas=[4,5,6,5,7,6,5,6,4,5,5,5];
+  var ZE=['🚀','🔥','🔶','🚨'], ZC=['z-ok','z-warn','z-warn','z-alert'];
   var cur=BASE, idx=0, stint=2, running=false;
   var tTick=null, tLap=null, tPit=null, tRise=null, tToast=null, tFlash=null;
 
@@ -711,18 +717,20 @@
   reset(trace,L); trace.style.opacity=0;
   reset(pitl,PL); pitl.style.opacity=0;
 
-  function zoneOf(p){ return p>=60?2:(p>=40?1:0); }
+  /* simulated 200k window: 🔥 at 80k, 🔶 at 60%, 🚨 ten points under a simulated 78% ceiling */
+  function zoneOf(p){ return p>=68?3:(p>=60?2:(p>=40?1:0)); }
+  function zoneMsg(z){ return z===2?'box this lap: /pit or --save':(z===3?'auto-pit at 78%':''); }
   function bar(p){ var n=Math.max(0,Math.min(10,Math.floor(p/10))),s='',i; for(i=0;i<10;i++) s+= i<n?'▮':'▯'; return s; }
 
   function paint(){
     var z=zoneOf(cur);
-    box.className='exploded '+(z===2?'z-alert':(z===1?'z-warn':'z-ok'));
-    trace.setAttribute('class','v3-trace '+(z===2?'z-alert':(z===1?'z-warn':'z-ok')));
-    zoneEl.textContent= z===2?'🚨':(z===1?'🔥':'🚀');
+    box.className='exploded '+ZC[z];
+    trace.setAttribute('class','v3-trace '+ZC[z]);
+    zoneEl.textContent=ZE[z];
     pctEl.textContent=cur+'%';
     barEl.textContent=bar(cur);
     stintEl.textContent=stint;
-    boardEl.textContent= z===2?'box this lap: /pit':'—';
+    boardEl.textContent= zoneMsg(z)||'—';
   }
   function showRise(n){
     clearTimeout(tRise);
@@ -755,7 +763,8 @@
     paint(); showRise(cur-prev);
     if(z>pz){
       flash();
-      toast(z===2?'REDLINE · box this lap: /pit':'plan your pit');
+      /* the strings of dash.ts toastText: zone 1 and 3 carry their emoji, zone 2 none */
+      toast(z===1?'🔥 revs '+cur+'% · auto-pit armed':(z===2?'revs '+cur+'% · box this lap: /pit or --save':'🚨 revs '+cur+'% · auto-pit at 78%'));
     }
     tTick=setTimeout(tick,GAP);
   }

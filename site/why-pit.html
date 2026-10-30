@@ -168,6 +168,9 @@
 #f2 *,#f2 *::before,#f2 *::after{box-sizing:border-box}
 #f2 .wrap{max-width:1120px;margin:0 auto;padding:0 20px}
 
+/* quality lead */
+#f2 .lead{max-width:68ch;margin:0 0 20px;font-size:16px;color:var(--ink)}
+
 /* verdict (hero) */
 #f2 .verdict{margin:4px 0 22px}
 #f2 .hero{margin:0;max-width:24ch;font:800 clamp(1.75rem,5.6vw,3.2rem)/1.12 var(--slab);letter-spacing:-.01em;text-wrap:balance}
@@ -178,6 +181,9 @@
 @keyframes f2-flash{from{opacity:.4}to{opacity:1}}
 #f2 .sent{max-width:none;margin:14px 0 0;font-size:17px;color:var(--ink-soft)}
 #f2 .diff{margin:8px 0 0;font:600 13px/1.4 var(--mono);color:var(--ink-soft)}
+#f2 .cond{margin:8px 0 0;font:12.5px/1.5 var(--mono);color:var(--ink-soft)}
+#f2 .ttl-sw{font:700 11.5px/1.2 var(--mono);color:var(--ink);background:var(--card);border:1.5px solid var(--graphite);border-radius:3px 6px 4px 5px;padding:3px 8px;cursor:pointer}
+#f2 .ttl-sw:hover{background:var(--paper-2)}
 
 /* chart toolbar */
 #f2 .bar{display:flex;flex-wrap:wrap;gap:10px 20px;justify-content:space-between;align-items:center;margin:0 0 10px}
@@ -224,6 +230,9 @@
 #f2 .pre:hover{background:var(--paper-2)}
 #f2 .pre[aria-pressed="true"]{background:var(--ink);color:var(--paper)}
 
+#f2 .valset{border:0;margin:0 0 14px;padding:0;display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+#f2 .valset legend{float:left;padding:0;margin-right:8px;font:700 11px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--ink-soft)}
+
 /* driver cards */
 #f2 .drivers{display:grid;grid-template-columns:1fr;gap:18px}
 #f2 .drv{border:2px solid var(--graphite);border-top:6px dashed var(--graphite);background:var(--card);padding:12px 16px 14px;box-shadow:3px 4px 0 var(--shadow-1);border-radius:3px 8px 4px 7px/7px 3px 8px 4px;min-width:0}
@@ -241,7 +250,7 @@
 #f2 .sw{display:inline-flex;align-items:center;gap:8px;font:700 12.5px/1.2 var(--mono);cursor:pointer}
 #f2 .sw input{width:18px;height:18px;accent-color:var(--claude)}
 #f2 .price,#f2 .hint{margin:6px 0 0;font:11.5px/1.45 var(--mono);color:var(--ink-soft)}
-#f2 .price a,#f2 .assume a,#f2 .effnote a,#f2 .how a{color:var(--ink);text-decoration:underline;text-underline-offset:2px}
+#f2 .lead a,#f2 .price a,#f2 .assume a,#f2 .effnote a,#f2 .how a{color:var(--ink);text-decoration:underline;text-underline-offset:2px}
 #f2 .res{display:grid;grid-template-columns:1fr 1fr;gap:8px 14px;margin:14px 0 0;padding:12px 0 0;border-top:1px dashed var(--line)}
 #f2 .res dt{font:700 10.5px/1.3 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--ink-soft)}
 #f2 .res dd{margin:2px 0 0;font:800 1.7rem/1.1 var(--slab)}
@@ -263,7 +272,7 @@
 #f2 .etab th{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft)}
 #f2 .how p{margin:8px 0 0}
 
-#f2 a:focus-visible,#f2 select:focus-visible,#f2 input:focus-visible,#f2 .pre:focus-visible,#f2 summary:focus-visible{outline:3px solid var(--signal);outline-offset:2px}
+#f2 a:focus-visible,#f2 select:focus-visible,#f2 input:focus-visible,#f2 .pre:focus-visible,#f2 .ttl-sw:focus-visible,#f2 summary:focus-visible{outline:3px solid var(--signal);outline-offset:2px}
 
 @media (min-width:720px){
   #f2 .drivers{grid-template-columns:1fr 1fr}
@@ -310,10 +319,12 @@
 
 <section id="f2" aria-label="Cost simulation">
 <div class="wrap">
+  <p class="lead" id="quality">Pit stops are first about what the agent keeps, not what it costs. When the host compacts a long session, its summary can drop rules that were only said in the conversation: on one benchmark the first summary dropped about a third of the anti-cheating rules, and each later compaction lost more (<a href="https://arxiv.org/abs/2610.31778" target="_blank" rel="noopener">Salle et al. 2026</a>). A pit writes the goal, the decisions and the next step to notes before the context is reset. The simulation below shows the other side: what pits do to the bill.</p>
   <div class="verdict">
     <p class="hero" id="hero"></p>
     <p class="sent" id="sent"></p>
     <p class="diff" id="diff"></p>
+    <p class="cond"><span id="cond"></span> <button type="button" class="ttl-sw" id="ttl-sw"></button></p>
     <p class="sr" id="live" aria-live="polite" aria-atomic="true"></p>
   </div>
 
@@ -354,10 +365,16 @@
 
   <div class="presets" role="group" aria-label="Presets">
     <span class="pl" aria-hidden="true">Presets</span>
-    <button type="button" class="pre" data-p="0" aria-pressed="true">With stint vs without</button>
-    <button type="button" class="pre" data-p="1" aria-pressed="false">Pit at ~100k or not</button>
-    <button type="button" class="pre" data-p="2" aria-pressed="false">Cache on vs off</button>
+    <button type="button" class="pre" data-p="0" aria-pressed="true">21 laps · with stint vs without</button>
+    <button type="button" class="pre" data-p="1" aria-pressed="false">50 laps · with vs without</button>
+    <button type="button" class="pre" data-p="2" aria-pressed="false">150 laps · with vs without</button>
+    <button type="button" class="pre" data-p="3" aria-pressed="false">300 laps · with vs without</button>
+    <button type="button" class="pre" data-p="4" aria-pressed="false">Pit at ~100k or not</button>
+    <button type="button" class="pre" data-p="5" aria-pressed="false">Cache on vs off</button>
   </div>
+  <fieldset class="valset"><legend>Lap size</legend><div class="seg">
+    <input type="radio" name="valset" id="vs-every" value="every" checked><label for="vs-every">Everyday: +1k in, 500 out</label>
+    <input type="radio" name="valset" id="vs-heavy" value="heavy"><label for="vs-heavy">Heavy: +3k in, 1.5k out</label></div></fieldset>
 
   <div class="drivers" id="drivers"></div>
 
@@ -384,7 +401,7 @@
         <li>Stints are deduced, not chosen. Before a lap, if the prompt would cross the pit threshold, the agent pits. A pit costs one call that reads the context and writes the handoff as output. The next stint starts from the base prompt plus the handoff seed: about 16k tokens of the base are still cached and the rest is written again, the model answers "ready" to the notes, and the first lap re-reads files.</li>
         <li>Pauses: every N laps the user steps away for a number of minutes. A pause longer than the cache life expires the cache, and the next call writes the whole context again. With idle auto-pit on, stint pits after 50 minutes of idle when the context holds at least 80k tokens. On a 1-hour cache that pit reads a warm cache; on a 5-minute cache it fires after the cache has expired and pays a full write.</li>
         <li>Haiku 5.5 is tiered by prompt size: each call uses the rates for prompts up to 100k tokens or over 100k tokens.</li>
-        <li>Not modelled: the host's own compaction (both drivers pit at the same share of their window), batch or regional pricing, subscription usage limits, and answer quality as the context grows or after a summary. A summary can drop rules said only in the conversation: on one benchmark the first summary dropped about a third of the anti-cheating rules (<a href="https://arxiv.org/abs/2610.31778" target="_blank" rel="noopener">Salle et al. 2026</a>).</li>
+        <li>Not modelled: the host's own compaction (both drivers pit at the same share of their window), batch or regional pricing, subscription usage limits, and answer quality as the context grows or after a summary (see the note above the simulation).</li>
       </ol>
       <table class="etab">
         <caption class="sr">Effort output multipliers</caption>
@@ -471,18 +488,18 @@ const MODELS = {
 const EFFORT = { low: 0.52, medium: 1.00, high: 1.38, xhigh: 3.52, max: 5.0 };
 const WINDOWS = [120000, 200000, 500000, 1000000];
 
-const PRESETS = [
-  { a: { model: 'opus', effort: 'medium', win: 1e6, laps: 50, cache: true, idle: false },
-    b: { model: 'opus', effort: 'medium', win: 1e6, laps: 50, cache: true, idle: true } },
+const PRESETS = [21, 50, 150, 300].map(L => ({
+  a: { model: 'opus', effort: 'medium', win: 1e6, laps: L, cache: true, idle: false },
+  b: { model: 'opus', effort: 'medium', win: 1e6, laps: L, cache: true, idle: true } })).concat([
   { a: { model: 'opus', effort: 'medium', win: 1e6, laps: 50, cache: true, idle: false },
     b: { model: 'opus', effort: 'medium', win: 120000, laps: 50, cache: true, idle: false } },
   { a: { model: 'sonnet', effort: 'high', win: 200000, laps: 150, cache: false, idle: false },
     b: { model: 'sonnet', effort: 'high', win: 200000, laps: 150, cache: true, idle: false } }
-];
+]);
 
 const tier = (m, prompt) => m.tiers.find(t => !t.upTo || prompt <= t.upTo);
 
-const WARM = 16000;   // base tokens still cached after a pit (first call of a new session, measured)
+const WARM = 16000;   // base tokens still cached after a pit (first call of a new session)
 const READY = 300;    // the notes turn the new stint answers "ready" to (pit.ts)
 const IDLE_MIN = 50, IDLE_TOK = 80000;   // idle auto-pit: pit.ts AUTOPIT_DELAY_MIN, status.ts AUTOPIT_MIN_TOKENS
 
@@ -551,7 +568,7 @@ function card(s) {
     <fieldset class="row"><legend>Context window</legend>
       <div class="seg">${radios('win', WINDOWS, k)}</div></fieldset>
     <div class="row"><label class="lbl" for="laps-${s}">Laps</label>
-      <div class="laps"><input type="range" id="laps-${s}" min="10" max="600" step="10"><output id="lo-${s}" for="laps-${s}"></output></div></div>
+      <div class="laps"><input type="range" id="laps-${s}" min="10" max="600" step="1"><output id="lo-${s}" for="laps-${s}"></output></div></div>
     <div class="row"><label class="sw"><input type="checkbox" id="cache-${s}" checked> Cached input (prompt caching)</label></div>
     <div class="row"><label class="sw"><input type="checkbox" id="idle-${s}"> Idle auto-pit (stint)</label></div>
     <dl class="res">
@@ -654,7 +671,8 @@ function draw() {
   const win = rb.cost < ra.cost ? 'B' : 'A';
   const same = ratio < 1.05;
   const x = same ? 'about the same bill' : `${ratio < 10 ? ratio.toFixed(1) : Math.round(ratio)} times cheaper with ${win}`;
-  const lapsTxt = a.laps === b.laps ? `Same ${a.laps} laps:` : `${a.laps} vs ${b.laps} laps:`;
+  const ttlTxt = A.ttl === 60 ? '1-hour cache' : '5-minute cache';
+  const lapsTxt = a.laps === b.laps ? `Same ${a.laps} laps, ${ttlTxt}:` : `${a.laps} vs ${b.laps} laps, ${ttlTxt}:`;
   const hero = `${lapsTxt} <span class="va">${usd(ra.cost)}</span> vs <span class="vb">${usd(rb.cost)}</span>, <span class="x">${x}</span>`;
   const heroEl = $('hero');
   if (hero !== lastHero) {
@@ -666,14 +684,20 @@ function draw() {
   const desc = (S, d, r) => `${S} (${MODELS[d.model].name}, ${k(d.win)} window) ${pitsTxt(r)} and carries up to ${k(r.peak)} tokens into a call`;
   $('sent').textContent = `${desc('A', a, ra)}; ${desc('B', b, rb)}. Every call re-reads the whole context, so the bill follows the area under the context curve` +
     (a.cache !== b.cache ? ', and cached input bills that context at a small fraction of the input price.' : '.') +
-    ((ra.rewrites || rb.rewrites) ? ` Pauses longer than the cache life: A writes its whole context again ${ra.rewrites} time${ra.rewrites === 1 ? '' : 's'}, B ${rb.rewrites} time${rb.rewrites === 1 ? '' : 's'}` + ((ra.idlePits || rb.idlePits) ? '; the idle auto-pit shrinks the context before the cache expires.' : '.') : '');
+    ((ra.rewrites || rb.rewrites) ? ` Pauses longer than the ${A.ttl === 60 ? '1-hour' : '5-minute'} cache life: A writes its whole context again ${ra.rewrites} time${ra.rewrites === 1 ? '' : 's'}, B ${rb.rewrites} time${rb.rewrites === 1 ? '' : 's'}` + ((ra.idlePits || rb.idlePits) ? '; the idle auto-pit shrinks the context before the cache expires.' : '.') : '');
   let firstDiff = null;
   for (let i = 1; i <= Math.min(a.laps, b.laps); i++) if (Math.abs(ra.costPts[i] - rb.costPts[i]) > 0.01 * Math.max(ra.costPts[i], rb.costPts[i])) { firstDiff = i; break; }
   const untilTxt = firstDiff ? `Same bill until lap ${firstDiff - 1}. ` : '';
   $('diff').textContent = same
     ? (firstDiff ? untilTxt : `Same bill over all ${Math.min(a.laps, b.laps)} laps: ${ra.pits + rb.pits ? 'the pits cost what they save' : 'no driver pits'}. `) + `Difference: ${usd(hi - lo)}.`
     : untilTxt + `Difference: ${usd(hi - lo)}, ${Math.round((1 - lo / hi) * 100)}% less with driver ${win}.`;
-  $('assume').innerHTML = `Assumes a ${k(A.base)} base prompt, +${int(A.add)} new input and ${int(A.out)} output tokens per lap at default effort, output appended to the context; pit at ${Math.round(A.cap * 100)}% of the window; ${k(A.seed)} handoff seed and ${k(A.rework)} of files re-read after a pit; ${A.every ? `a ${int(A.pause)}-minute pause every ${A.every} laps` : 'no pauses'}; ${A.ttl === 60 ? '1-hour' : '5-minute'} cache life. Defaults measured on one heavy user's 30 days of Opus 5.5 sessions in Claude Code (277 sessions to 2026-10-30; median session 21 laps). List API prices, ${link(PRICE_URL, 'prices as of 2026-10-28')}.`;
+  $('cond').textContent = !A.every
+    ? 'No pauses: the cache never expires, so the idle auto-pit has nothing to save. On a flat-fee plan the gap does not show in dollars.'
+    : A.ttl === 60
+      ? 'Assumes the 1-hour cache life: the gap comes from pauses longer than the cache. An API key uses the 5-minute cache by default. On a flat-fee plan the gap does not show in dollars.'
+      : 'Assumes the 5-minute cache, the API default: almost every pause expires it, so the idle auto-pit fires after the cache is gone and pays a full write. On a flat-fee plan the gap does not show in dollars.';
+  $('ttl-sw').textContent = A.ttl === 60 ? 'Switch to 5-minute cache' : 'Switch to 1-hour cache';
+  $('assume').innerHTML = `Assumes a ${k(A.base)} base prompt, +${int(A.add)} new input and ${int(A.out)} output tokens per lap at default effort, output appended to the context; pit at ${Math.round(A.cap * 100)}% of the window; ${k(A.seed)} handoff seed and ${k(A.rework)} of files re-read after a pit; ${A.every ? `a ${int(A.pause)}-minute pause every ${A.every} laps` : 'no pauses'}; ${A.ttl === 60 ? '1-hour' : '5-minute'} cache life. Simulation assumptions, not measurements. List API prices, ${link(PRICE_URL, 'prices as of 2026-10-28')}.`;
 
   clearTimeout(liveTimer);
   liveTimer = setTimeout(() => { $('live').textContent = `Driver A ${usd(ra.cost)}, driver B ${usd(rb.cost)}: ${x}.`; }, 600);
@@ -685,7 +709,19 @@ function applyPreset(i) {
   draw();
 }
 
-root.addEventListener('click', e => { const btn = e.target.closest('.pre'); if (btn) applyPreset(+btn.dataset.p); });
+root.addEventListener('click', e => {
+  const btn = e.target.closest('.pre'); if (btn) applyPreset(+btn.dataset.p);
+  if (e.target.closest('#ttl-sw')) { $('as-ttl').value = $('as-ttl').value === '60' ? '5' : '60'; draw(); }
+});
+root.addEventListener('input', e => {   // lap-size switch: sets as-add / as-out; the listener below draws
+  const t = e.target;
+  if (t.name === 'valset') {
+    const heavy = t.value === 'heavy';
+    $('as-add').value = heavy ? 3000 : 1000; $('as-out').value = heavy ? 1500 : 500;
+  } else if (t.id === 'as-add' || t.id === 'as-out') {
+    root.querySelectorAll('input[name=valset]').forEach(r => { r.checked = false; });
+  }
+});
 root.addEventListener('input', e => {
   const t = e.target;
   if (t.closest('.drivers')) {
