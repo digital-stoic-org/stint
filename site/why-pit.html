@@ -8,12 +8,12 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <style>html,body{background:#f4ecd8}</style>
   <title>Why an agent needs pit stops · stint</title>
-  <meta name="description" content="Context 101: the context window is the fuel tank, answers degrade well before it is full, and a pit keeps the goal, the decisions and the next step.">
+  <meta name="description" content="Context 101: the context window is the fuel tank. A summary can drop rules that were only said in the conversation; a pit writes the goal, the decisions and the next step to notes first.">
   <link rel="canonical" href="https://stint.digitalstoic.net/why-pit.html">
   <meta property="og:type" content="website">
   <meta property="og:title" content="Why an agent needs pit stops · stint">
   <meta property="og:url" content="https://stint.digitalstoic.net/why-pit.html">
-  <meta property="og:description" content="Context 101: the context window is the fuel tank, answers degrade well before it is full, and a pit keeps the goal, the decisions and the next step.">
+  <meta property="og:description" content="Context 101: the context window is the fuel tank. A summary can drop rules that were only said in the conversation; a pit writes the goal, the decisions and the next step to notes first.">
   <meta property="og:image" content="https://stint.digitalstoic.net/og.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
@@ -255,7 +255,7 @@
 #f2 .how-in{padding:0 16px 16px;font-size:15px}
 #f2 .asm{display:grid;grid-template-columns:1fr;gap:10px 18px;margin:4px 0 12px}
 #f2 .asm label{display:flex;justify-content:space-between;align-items:center;gap:10px;font:600 12.5px/1.3 var(--mono)}
-#f2 .asm input{width:7.5em;font:700 13px/1.2 var(--mono);color:var(--ink);background:var(--paper);border:2px solid var(--graphite);padding:5px 6px;text-align:right}
+#f2 .asm input,#f2 .asm select{width:7.5em;font:700 13px/1.2 var(--mono);color:var(--ink);background:var(--paper);border:2px solid var(--graphite);padding:5px 6px;text-align:right}
 #f2 .how ol{margin:0;padding-left:1.3em}
 #f2 .how li{margin:0 0 6px}
 #f2 .etab{border-collapse:collapse;margin:10px 0 6px;font:12.5px/1.4 var(--mono)}
@@ -335,6 +335,8 @@
       <li><button type="button" class="legend-chip" data-t="pit" aria-pressed="false" aria-describedby="legend-d-pit"><span aria-hidden="true">🔧</span> pit stop</button></li>
       <li><button type="button" class="legend-chip" data-t="handoff" aria-pressed="false" aria-describedby="legend-d-handoff"><span aria-hidden="true">📝</span> handoff</button></li>
       <li><button type="button" class="legend-chip" data-t="cache" aria-pressed="false" aria-describedby="legend-d-cache"><span aria-hidden="true">💾</span> cached input</button></li>
+      <li><button type="button" class="legend-chip" data-t="cachelife" aria-pressed="false" aria-describedby="legend-d-cachelife"><span aria-hidden="true">⏳</span> cache life</button></li>
+      <li><button type="button" class="legend-chip" data-t="autopit" aria-pressed="false" aria-describedby="legend-d-autopit"><span aria-hidden="true">⏸️</span> auto-pit</button></li>
       <li><button type="button" class="legend-chip" data-t="effort" aria-pressed="false" aria-describedby="legend-d-effort"><span aria-hidden="true">🎚️</span> effort</button></li>
     </ul>
     <div class="legend-pop" id="legend-pop" aria-hidden="true"></div>
@@ -344,14 +346,16 @@
     <span class="legend-sr" id="legend-d-stint">Stint = a stretch of laps between two pit stops.</span>
     <span class="legend-sr" id="legend-d-pit">Pit stop = reset the context to a short handoff, then keep racing.</span>
     <span class="legend-sr" id="legend-d-handoff">Handoff / seed = the notes that survive a pit: goal, decisions, next step. They seed the next stint.</span>
-    <span class="legend-sr" id="legend-d-cache">Cached input = context already sent, re-read at a lower rate.</span>
+    <span class="legend-sr" id="legend-d-cache">Cached input = context already sent, re-read at a lower rate for 5 minutes or 1 hour after the last call; after that, the next call writes it again at the cache-write price.</span>
+    <span class="legend-sr" id="legend-d-cachelife">Cache life = how long cached input stays cheap: 5 minutes by default on the API, 1 hour with the 1-hour cache. A longer pause means the whole context is written again.</span>
+    <span class="legend-sr" id="legend-d-autopit">Auto-pit = stint pits by itself: after 50 minutes idle with at least 80k tokens of context, before the cache expires, or right after a turn at 80% of the window (earlier if the host compacts sooner).</span>
     <span class="legend-sr" id="legend-d-effort">Effort = how much the model thinks and writes per lap; more effort, more output tokens.</span>
   </div>
 
   <div class="presets" role="group" aria-label="Presets">
     <span class="pl" aria-hidden="true">Presets</span>
-    <button type="button" class="pre" data-p="0" aria-pressed="true">Long session vs stints</button>
-    <button type="button" class="pre" data-p="1" aria-pressed="false">Same model, pit or not</button>
+    <button type="button" class="pre" data-p="0" aria-pressed="true">With stint vs without</button>
+    <button type="button" class="pre" data-p="1" aria-pressed="false">Pit at ~100k or not</button>
     <button type="button" class="pre" data-p="2" aria-pressed="false">Cache on vs off</button>
   </div>
 
@@ -363,18 +367,24 @@
     <summary>How this is computed</summary>
     <div class="how-in">
       <div class="asm">
-        <label for="as-add">New input tokens per lap <input type="number" id="as-add" min="0" max="50000" step="500" value="3000"></label>
-        <label for="as-out">Output tokens per lap, default effort <input type="number" id="as-out" min="0" max="50000" step="100" value="1500"></label>
-        <label for="as-seed">Handoff seed after a pit <input type="number" id="as-seed" min="0" max="100000" step="1000" value="5000"></label>
-        <label for="as-cap">Pit at % of window <input type="number" id="as-cap" min="50" max="95" step="1" value="83"></label>
+        <label for="as-add">New input tokens per lap <input type="number" id="as-add" min="0" max="50000" step="100" value="1000"></label>
+        <label for="as-out">Output tokens per lap, default effort <input type="number" id="as-out" min="0" max="50000" step="100" value="500"></label>
+        <label for="as-seed">Handoff seed after a pit <input type="number" id="as-seed" min="0" max="100000" step="500" value="2000"></label>
+        <label for="as-cap">Pit at % of window <input type="number" id="as-cap" min="50" max="95" step="1" value="80"></label>
+        <label for="as-base">Base prompt: system, tools, project files <input type="number" id="as-base" min="0" max="200000" step="1000" value="35000"></label>
+        <label for="as-rework">Files re-read after a pit <input type="number" id="as-rework" min="0" max="200000" step="1000" value="18000"></label>
+        <label for="as-every">Pause every N laps (0 = never) <input type="number" id="as-every" min="0" max="600" step="1" value="12"></label>
+        <label for="as-pause">Pause length, minutes <input type="number" id="as-pause" min="0" max="1440" step="5" value="90"></label>
+        <label for="as-ttl">Cache life <select id="as-ttl"><option value="5">5 min</option><option value="60" selected>1 h</option></select></label>
       </div>
       <ol>
         <li>A lap is one call. Its prompt is the whole context so far plus the new input of the lap (tool results, user turn).</li>
         <li>The reply is billed at the output price and appended to the context. Its size is the base output times the effort multiplier.</li>
-        <li>Cached input on: the prompt already sent on the previous call is read at the cache-read price, and everything new since then (last reply and new input) is written at the 5-minute cache-write price. Cached input off: the whole prompt is billed at the base input price.</li>
-        <li>Stints are deduced, not chosen. Before a lap, if the prompt would cross the pit threshold, the agent pits. A pit costs one extra call that reads the context and writes the handoff as output. The next stint starts from the handoff seed with a cold cache.</li>
+        <li>Cached input on: the prompt already sent is read at the cache-read price, and everything new since the previous call is written at the cache-write price of the chosen cache life (5 minutes: 1.25 times the input price; 1 hour: 2 times). Cached input off: the whole prompt is billed at the base input price.</li>
+        <li>Stints are deduced, not chosen. Before a lap, if the prompt would cross the pit threshold, the agent pits. A pit costs one call that reads the context and writes the handoff as output. The next stint starts from the base prompt plus the handoff seed: about 16k tokens of the base are still cached and the rest is written again, the model answers "ready" to the notes, and the first lap re-reads files.</li>
+        <li>Pauses: every N laps the user steps away for a number of minutes. A pause longer than the cache life expires the cache, and the next call writes the whole context again. With idle auto-pit on, stint pits after 50 minutes of idle when the context holds at least 80k tokens. On a 1-hour cache that pit reads a warm cache; on a 5-minute cache it fires after the cache has expired and pays a full write.</li>
         <li>Haiku 5.5 is tiered by prompt size: each call uses the rates for prompts up to 100k tokens or over 100k tokens.</li>
-        <li>Not modelled: cache expiry between laps (laps are assumed to come within 5 minutes), system prompt and tool definitions, batch or regional pricing, and answer quality as the context grows.</li>
+        <li>Not modelled: the host's own compaction (both drivers pit at the same share of their window), batch or regional pricing, subscription usage limits, and answer quality as the context grows or after a summary. A summary can drop rules said only in the conversation: on one benchmark the first summary dropped about a third of the anti-cheating rules (<a href="https://arxiv.org/abs/2610.31778" target="_blank" rel="noopener">Salle et al. 2026</a>).</li>
       </ol>
       <table class="etab">
         <caption class="sr">Effort output multipliers</caption>
@@ -417,7 +427,6 @@
     <div class="road-r">
       <ul class="road-list">
         <li><code>checkpoint</code> Logs the moments that matter, builds notes</li>
-        <li><code>auto pit</code> Pits by itself at the redline</li>
         <li><code>radio</code> Warns the model as context climbs</li>
         <li><code>team</code> Agent teams, run like a pit crew</li>
       </ul>
@@ -451,48 +460,65 @@
 const PRICE_URL = 'https://platform.claude.com/docs/en/about-claude/pricing';
 const EFFORT_URL = 'https://platform.claude.com/docs/en/build-with-claude/effort';
 
-// USD per MTok, prices as of 2026-10-28: input / 5m cache write / cache read / output
+// USD per MTok, prices as of 2026-10-28: input / 5-min cache write / 1-h cache write / cache read / output
 const MODELS = {
-  fable:  { name: 'Fable 5.1',  def: 'high',   tiers: [{ in: 10, cw: 12.5, cr: 0.25, out: 50 }] },
-  opus:   { name: 'Opus 5.5',   def: 'medium', tiers: [{ in: 4, cw: 5, cr: 0.20, out: 20 }] },
-  sonnet: { name: 'Sonnet 5.5', def: 'high',   tiers: [{ in: 2, cw: 2.5, cr: 0.10, out: 10 }] },
-  haiku:  { name: 'Haiku 5.5',  def: 'medium', tiers: [{ upTo: 100000, in: 0.10, cw: 0.125, cr: 0.01, out: 0.50 }, { in: 0.50, cw: 0.625, cr: 0.05, out: 2.50 }] }
+  fable:  { name: 'Fable 5.1',  def: 'high',   tiers: [{ in: 10, w5: 12.5, w1: 20, cr: 0.25, out: 50 }] },
+  opus:   { name: 'Opus 5.5',   def: 'medium', tiers: [{ in: 4, w5: 5, w1: 8, cr: 0.20, out: 20 }] },
+  sonnet: { name: 'Sonnet 5.5', def: 'high',   tiers: [{ in: 2, w5: 2.5, w1: 4, cr: 0.10, out: 10 }] },
+  haiku:  { name: 'Haiku 5.5',  def: 'medium', tiers: [{ upTo: 100000, in: 0.10, w5: 0.125, w1: 0.20, cr: 0.01, out: 0.50 }, { in: 0.50, w5: 0.625, w1: 1, cr: 0.05, out: 2.50 }] }
 };
 // Output multiplier per effort level, from Opus 5.5 cost per task (SWE-bench Pro subset). max = placeholder.
 const EFFORT = { low: 0.52, medium: 1.00, high: 1.38, xhigh: 3.52, max: 5.0 };
 const WINDOWS = [120000, 200000, 500000, 1000000];
 
 const PRESETS = [
-  { a: { model: 'opus', effort: 'medium', win: 1e6, laps: 300, cache: true },
-    b: { model: 'sonnet', effort: 'high', win: 120000, laps: 300, cache: true } },
-  { a: { model: 'opus', effort: 'medium', win: 1e6, laps: 300, cache: true },
-    b: { model: 'opus', effort: 'medium', win: 120000, laps: 300, cache: true } },
-  { a: { model: 'sonnet', effort: 'high', win: 200000, laps: 150, cache: false },
-    b: { model: 'sonnet', effort: 'high', win: 200000, laps: 150, cache: true } }
+  { a: { model: 'opus', effort: 'medium', win: 1e6, laps: 50, cache: true, idle: false },
+    b: { model: 'opus', effort: 'medium', win: 1e6, laps: 50, cache: true, idle: true } },
+  { a: { model: 'opus', effort: 'medium', win: 1e6, laps: 50, cache: true, idle: false },
+    b: { model: 'opus', effort: 'medium', win: 120000, laps: 50, cache: true, idle: false } },
+  { a: { model: 'sonnet', effort: 'high', win: 200000, laps: 150, cache: false, idle: false },
+    b: { model: 'sonnet', effort: 'high', win: 200000, laps: 150, cache: true, idle: false } }
 ];
 
 const tier = (m, prompt) => m.tiers.find(t => !t.upTo || prompt <= t.upTo);
 
+const WARM = 16000;   // base tokens still cached after a pit (first call of a new session, measured)
+const READY = 300;    // the notes turn the new stint answers "ready" to (pit.ts)
+const IDLE_MIN = 50, IDLE_TOK = 80000;   // idle auto-pit: pit.ts AUTOPIT_DELAY_MIN, status.ts AUTOPIT_MIN_TOKENS
+
+// d: { model, effort, win, laps, cache, idle } · A: { add, out, seed, cap, base, rework, ttl: 5|60, every, pause }
 function simulate(d, A) {
   const m = MODELS[d.model];
   const outTok = Math.round(A.out * EFFORT[d.effort] / EFFORT[m.def]);
-  const cap = d.win * A.cap;
-  let ctx = A.seed, cached = 0, cost = 0, pits = 0, peak = 0;
-  const ctxPts = [A.seed], costPts = [0], pitLaps = [];
+  const cap = d.win * A.cap, start = A.base + A.seed;
+  let ctx = A.base, cached = 0, cost = 0, pits = 0, idlePits = 0, rewrites = 0, peak = 0, rework = 0;
+  const ctxPts = [ctx], costPts = [0], pitLaps = [];
+  function call(prompt, hit, o, ttl) {
+    const p = tier(m, prompt), rd = d.cache ? Math.min(hit, prompt) : 0;
+    cost += (d.cache ? rd * p.cr + (prompt - rd) * (ttl === 60 ? p.w1 : p.w5) : prompt * p.in) / 1e6 + o * p.out / 1e6;
+  }
+  function pit(hit, i) {   // fork reads the context and writes the handoff, then the new stint answers "ready"
+    call(ctx, hit, A.seed, 5);
+    cached = WARM;
+    if (READY) { const rp = start + READY; call(rp, cached, 10, A.ttl); cached = rp; }
+    ctx = start; rework = A.rework; pits++; pitLaps.push(i - 1);
+  }
   for (let i = 1; i <= d.laps; i++) {
-    if (ctx > A.seed && ctx + A.add > cap) {          // pit: read the context, write the handoff
-      const p = tier(m, ctx), rd = d.cache ? Math.min(cached, ctx) : 0;
-      cost += (d.cache ? rd * p.cr + (ctx - rd) * p.cw : ctx * p.in) / 1e6 + A.seed * p.out / 1e6;
-      ctx = A.seed; cached = 0; pits++; pitLaps.push(i - 1);
+    if (A.every && i > 1 && (i - 1) % A.every === 0) {               // the user pauses `pause` minutes before lap i
+      let idle = A.pause;
+      if (d.idle && idle >= IDLE_MIN && ctx >= IDLE_TOK && ctx > start) {
+        pit(IDLE_MIN < A.ttl ? cached : 0, i); idlePits++; idle -= IDLE_MIN;   // fires at 50 min; on a 5-min TTL it finds the cache dead
+      }
+      if (idle >= A.ttl && cached) { cached = 0; rewrites++; }
     }
-    const req = ctx + A.add, p = tier(m, req);
-    if (d.cache) { const rd = Math.min(cached, req); cost += (rd * p.cr + (req - rd) * p.cw) / 1e6; cached = req; }
-    else cost += req * p.in / 1e6;
-    cost += outTok * p.out / 1e6;
+    if (ctx > start && ctx + A.add > cap) pit(cached, i);
+    const req = ctx + A.add + rework; rework = 0;
+    call(req, cached, outTok, A.ttl);
+    cached = d.cache ? req : 0;
     ctx = req + outTok; peak = Math.max(peak, req);
     ctxPts.push(req); costPts.push(cost);
   }
-  return { ctxPts, costPts, cost, pits, stints: pits + 1, peak, outTok, cap, pitLaps };
+  return { ctxPts, costPts, cost, pits, idlePits, rewrites, stints: pits + 1, peak, outTok, cap, pitLaps };
 }
 
 const $ = id => document.getElementById(id);
@@ -504,10 +530,10 @@ const rate = v => '$' + (Number.isInteger(v) ? v : v.toFixed(Math.max(2, (String
 const link = (url, txt) => `<a href="${url}" target="_blank" rel="noopener">${txt}</a>`;
 
 function priceText(m) {
-  const t = m.tiers, q = x => `${rate(x.in)} / ${rate(x.cw)} / ${rate(x.cr)} / ${rate(x.out)}`;
+  const t = m.tiers, q = x => `${rate(x.in)} / ${rate(x.w5)} / ${rate(x.w1)} / ${rate(x.cr)} / ${rate(x.out)}`;
   const body = t.length > 1
-    ? `prompts &le;100k: ${q(t[0])} · over 100k: ${q(t[1])} (input / cache write / cache read / output per MTok)`
-    : `${rate(t[0].in)} input · ${rate(t[0].cw)} cache write · ${rate(t[0].cr)} cache read · ${rate(t[0].out)} output per MTok`;
+    ? `prompts &le;100k: ${q(t[0])} · over 100k: ${q(t[1])} (input / 5-min write / 1-h write / cache read / output per MTok)`
+    : `${rate(t[0].in)} input · ${rate(t[0].w5)} 5-min cache write · ${rate(t[0].w1)} 1-h cache write · ${rate(t[0].cr)} cache read · ${rate(t[0].out)} output per MTok`;
   return `${body} · ${link(PRICE_URL, 'prices as of 2026-10-28')}`;
 }
 
@@ -527,6 +553,7 @@ function card(s) {
     <div class="row"><label class="lbl" for="laps-${s}">Laps</label>
       <div class="laps"><input type="range" id="laps-${s}" min="10" max="600" step="10"><output id="lo-${s}" for="laps-${s}"></output></div></div>
     <div class="row"><label class="sw"><input type="checkbox" id="cache-${s}" checked> Cached input (prompt caching)</label></div>
+    <div class="row"><label class="sw"><input type="checkbox" id="idle-${s}"> Idle auto-pit (stint)</label></div>
     <dl class="res">
       <div><dt>Stints, deduced</dt><dd><span id="st-${s}"></span><span class="sub" id="sts-${s}"></span></dd></div>
       <div><dt>Total bill</dt><dd><span id="tot-${s}"></span><span class="sub" id="tots-${s}"></span></dd></div>
@@ -542,14 +569,16 @@ function setDriver(s, d) {
   pick('win-' + s, d.win);
   $('laps-' + s).value = d.laps;
   $('cache-' + s).checked = d.cache;
+  $('idle-' + s).checked = !!d.idle;
 }
 function getDriver(s) {
   const g = n => root.querySelector(`input[name=${n}-${s}]:checked`).value;
-  return { model: $('model-' + s).value, effort: g('eff'), win: +g('win'), laps: +$('laps-' + s).value, cache: $('cache-' + s).checked };
+  return { model: $('model-' + s).value, effort: g('eff'), win: +g('win'), laps: +$('laps-' + s).value, cache: $('cache-' + s).checked, idle: $('idle-' + s).checked };
 }
 function readAssume() {
   const num = (id, d, lo, hi) => { const v = parseFloat($(id).value); return isFinite(v) ? Math.min(hi, Math.max(lo, v)) : d; };
-  return { add: num('as-add', 3000, 0, 50000), out: num('as-out', 1500, 0, 50000), seed: num('as-seed', 5000, 0, 100000), cap: num('as-cap', 83, 50, 95) / 100 };
+  return { add: num('as-add', 1000, 0, 50000), out: num('as-out', 500, 0, 50000), seed: num('as-seed', 2000, 0, 100000), cap: num('as-cap', 80, 50, 95) / 100,
+    base: num('as-base', 35000, 0, 200000), rework: num('as-rework', 18000, 0, 200000), every: num('as-every', 12, 0, 600), pause: num('as-pause', 90, 0, 1440), ttl: +$('as-ttl').value };
 }
 
 function niceStep(max, n) {
@@ -615,9 +644,9 @@ function draw() {
     $('hint-' + s).textContent = `x${mult.toFixed(2)} vs ${mo.name} default (${mo.def}) · ${int(r.outTok)} output tokens per lap` + (d.effort === 'max' ? ' · max is a placeholder, no published data' : '');
     $('lo-' + s).textContent = d.laps;
     $('st-' + s).textContent = r.stints;
-    $('sts-' + s).textContent = (r.pits ? `${r.pits} pit stop${r.pits > 1 ? 's' : ''}` : 'no pit needed') + ` · pits at ${k(r.cap)} (${Math.round(A.cap * 100)}% of ${k(d.win)})`;
+    $('sts-' + s).textContent = (r.pits ? `${r.pits} pit stop${r.pits > 1 ? 's' : ''}` : 'no pit needed') + (r.idlePits ? ` (${r.idlePits} by idle auto-pit)` : '') + ` · pits at ${k(r.cap)} (${Math.round(A.cap * 100)}% of ${k(d.win)})`;
     $('tot-' + s).textContent = usd(r.cost);
-    $('tots-' + s).textContent = `peak ${k(r.peak)} tokens per call · ${usd(r.cost / d.laps)} per lap`;
+    $('tots-' + s).textContent = `peak ${k(r.peak)} tokens per call · ${usd(r.cost / d.laps)} per lap` + (r.rewrites ? ` · ${r.rewrites} cache re-write${r.rewrites > 1 ? 's' : ''} after a pause` : '');
   });
 
   // verdict
@@ -636,9 +665,15 @@ function draw() {
   const pitsTxt = r => r.pits === 0 ? 'never pits' : r.pits === 1 ? 'pits once' : `pits ${r.pits} times`;
   const desc = (S, d, r) => `${S} (${MODELS[d.model].name}, ${k(d.win)} window) ${pitsTxt(r)} and carries up to ${k(r.peak)} tokens into a call`;
   $('sent').textContent = `${desc('A', a, ra)}; ${desc('B', b, rb)}. Every call re-reads the whole context, so the bill follows the area under the context curve` +
-    (a.cache !== b.cache ? ', and cached input bills that context at a small fraction of the input price.' : '.');
-  $('diff').textContent = same ? `Difference: ${usd(hi - lo)}.` : `Difference: ${usd(hi - lo)}, ${Math.round((1 - lo / hi) * 100)}% less with driver ${win}.`;
-  $('assume').innerHTML = `Assumes +${int(A.add)} new input and ${int(A.out)} output tokens per lap at default effort, output appended to the context; pit at ${Math.round(A.cap * 100)}% of the window; ${k(A.seed)} handoff seed. List API prices, ${link(PRICE_URL, 'prices as of 2026-10-28')}.`;
+    (a.cache !== b.cache ? ', and cached input bills that context at a small fraction of the input price.' : '.') +
+    ((ra.rewrites || rb.rewrites) ? ` Pauses longer than the cache life: A writes its whole context again ${ra.rewrites} time${ra.rewrites === 1 ? '' : 's'}, B ${rb.rewrites} time${rb.rewrites === 1 ? '' : 's'}` + ((ra.idlePits || rb.idlePits) ? '; the idle auto-pit shrinks the context before the cache expires.' : '.') : '');
+  let firstDiff = null;
+  for (let i = 1; i <= Math.min(a.laps, b.laps); i++) if (Math.abs(ra.costPts[i] - rb.costPts[i]) > 0.01 * Math.max(ra.costPts[i], rb.costPts[i])) { firstDiff = i; break; }
+  const untilTxt = firstDiff ? `Same bill until lap ${firstDiff - 1}. ` : '';
+  $('diff').textContent = same
+    ? (firstDiff ? untilTxt : `Same bill over all ${Math.min(a.laps, b.laps)} laps: ${ra.pits + rb.pits ? 'the pits cost what they save' : 'no driver pits'}. `) + `Difference: ${usd(hi - lo)}.`
+    : untilTxt + `Difference: ${usd(hi - lo)}, ${Math.round((1 - lo / hi) * 100)}% less with driver ${win}.`;
+  $('assume').innerHTML = `Assumes a ${k(A.base)} base prompt, +${int(A.add)} new input and ${int(A.out)} output tokens per lap at default effort, output appended to the context; pit at ${Math.round(A.cap * 100)}% of the window; ${k(A.seed)} handoff seed and ${k(A.rework)} of files re-read after a pit; ${A.every ? `a ${int(A.pause)}-minute pause every ${A.every} laps` : 'no pauses'}; ${A.ttl === 60 ? '1-hour' : '5-minute'} cache life. Defaults measured on one heavy user's 30 days of Opus 5.5 sessions in Claude Code (277 sessions to 2026-10-30; median session 21 laps). List API prices, ${link(PRICE_URL, 'prices as of 2026-10-28')}.`;
 
   clearTimeout(liveTimer);
   liveTimer = setTimeout(() => { $('live').textContent = `Driver A ${usd(ra.cost)}, driver B ${usd(rb.cost)}: ${x}.`; }, 600);

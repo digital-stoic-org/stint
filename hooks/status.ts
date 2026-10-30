@@ -25,6 +25,11 @@ let autopitInfo: AutopitInfo | undefined
 export type IdleFire = { fireAt: number; showAt: number }
 let idleFire: IdleFire | undefined
 
+// The prompt-cache TTL of the main conversation, as dash reads it from the transcript's tail. The auto-pit idle wait (50 min) assumes 1h; on 5m the save would rebuild the context.
+// undefined = unknown (nothing read yet, or the read failed): then nothing is shown.
+export type CacheBucket = '1h' | '5m'
+let cacheBucket: CacheBucket | undefined
+
 export function setPitBoard(msg: PitBoard | undefined) {
   pitBoard = msg
 }
@@ -42,6 +47,12 @@ export function setIdleFire(fire: IdleFire | undefined) {
 }
 
 export const getIdleFire = () => idleFire
+
+export function setCacheBucket(bucket: CacheBucket | undefined) {
+  cacheBucket = bucket
+}
+
+export const getCacheBucket = () => cacheBucket
 
 export function setBandUp(up: boolean) {
   bandUp = up

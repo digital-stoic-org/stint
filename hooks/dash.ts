@@ -1,7 +1,8 @@
 import type { EngineInterface, On, PluginOptions, SessionContextUsage, SessionRateLimit } from 'claude-code'
 import type { Board } from '../types'
-import { AUTOPIT_CEILING, AUTOPIT_MIN_TOKENS, getAutopitInfo, getIdleFire, getPitBoard, setBandUp, setDashLine, writeStatus } from './status.ts'
-import type { PitBoard } from './status.ts'
+import { bucketOf } from './cache.ts'
+import { AUTOPIT_CEILING, AUTOPIT_MIN_TOKENS, getAutopitInfo, getCacheBucket, getIdleFire, getPitBoard, setBandUp, setCacheBucket, setDashLine, writeStatus } from './status.ts'
+import type { CacheBucket, PitBoard } from './status.ts'
 
 // dash (stint): the car's instruments, in a band above the prompt.
 //   revs   context fill, % of the model window (the native status line's figure); `/1M` after it when the window is not 200k
@@ -9,6 +10,7 @@ import type { PitBoard } from './status.ts'
 //   fuel   what is left of the tighter plan window (five_hour / seven_day); shown only below 30 %
 //   stint  the stint counter (notes header `stint`); shown from the second stint
 //   board  one short message from $.state { plugin: 'stint', key: 'board' }; `—` when empty
+//   cache  a warning, leftmost, while the main conversation's prompt cache is on the 5 min TTL (the auto-pit idle wait assumes 1 h); read from the transcript's tail at the end of each main turn, CLI only
 // Three zones: soft on absolute tokens (80k, never past 40 % of a small window), hard at 60 % of the window, and, while the auto-pit is on, a red one 10 points under its ceiling.
 // pit publishes the ceiling (capped by the auto-compaction wall) and the idle timer through status.ts; dash never reads the wall itself.
 // The band (terminal, desktop) is drawn by band.ts from bandRuns(); where it is never raised (vscode, mobile) the same line goes to the status line, which pit's lines win.
@@ -35,6 +37,11 @@ export const PRE_CEILING_LEAD = 10
 export const PIT_DONE_TOAST = '✅ pit done · fresh window'
 // How long a finished pit waits for the first measure of the fresh context before it settles for the plain toast.
 export const PIT_WAIT_MS = 30_000
+// The transcript's tail read for the cache TTL: the last 256 KiB, in one short process.
+export const CACHE_TAIL_BYTES = 262_144
+export const CACHE_TAIL_MS = 3000
+export const CACHE_WARNING = '⚠️ cache 5 min · auto-pit rebuilds the context'
+export const CACHE_WARNING_ASCII = '! cache 5min'
 
 export type Zone = 0 | 1 | 2 | 3
 export type Reading = { percent: number; tokens: number; window: number; rateLimits: readonly SessionRateLimit[] }
@@ -152,12 +159,12 @@ export function pickBoard(stored: Board | undefined, now: number, zone: Zone, pi
   return isZone && options.idleAt !== undefined ? { ...message, text: message.text + idleTail(options.idleAt, emoji) } : message
 }
 
-// Terminal columns, roughly: emoji take two, the variation selector none.
+// Terminal columns, roughly: emoji take two (⚠ too, stint always writes it with the variation selector), the variation selector none.
 export function cols(s: string): number {
   let n = 0
   for (const ch of s) {
     const cp = ch.codePointAt(0) as number
-    n += cp === 0xfe0f ? 0 : cp >= 0x1f000 || cp === 0x26fd || cp === 0x2705 ? 2 : 1
+    n += cp === 0xfe0f ? 0 : cp >= 0x1f000 || cp === 0x26fd || cp === 0x2705 || cp === 0x26a0 ? 2 : 1
   }
   return n
 }
@@ -190,10 +197,17 @@ export type LineInput = {
   // The revs points a pit just freed, shown like the rise for 3 s.
   gain?: number
   gainAt?: number
+  // The main conversation's prompt-cache TTL; '5m' puts the warning first. Absent = unknown.
+  cacheBucket?: CacheBucket
 }
 
 export const flashing = (now: number, at: number) => at >= 0 && now >= at && now - at < FLASH_MS
 const widthOf = (runs: readonly Run[]) => runs.reduce((n, r) => n + cols(r.text), 0)
+
+// The warning of the 5 min cache bucket: bold, orange in the emoji band.
+export function cacheRun(emoji: boolean): Run {
+  return { text: emoji ? CACHE_WARNING : CACHE_WARNING_ASCII, bold: true, ...(emoji ? { color: ORANGE } : {}) }
+}
 
 // The line as styled runs.
 export function buildRuns(input: LineInput, { emoji }: DashOptions, columns: number): Run[] {
@@ -207,7 +221,9 @@ export function buildRuns(input: LineInput, { emoji }: DashOptions, columns: num
 
   const zoneStyle: Partial<Run> = zone === 3 ? { bold: true, ...hot(RED) } : zone === 2 ? { bold: true, ...hot(ORANGE) } : zone === 1 ? hot(ORANGE) : {}
   const revsStyle = flashing(now, input.flashAt ?? -1) ? flash : zoneStyle
-  const runs: Run[] = [{ text: `${emoji ? `${ZONE_EMOJI[zone]} ` : ''}revs ${Math.round(reading.percent)}%${windowTag(reading.window)} `, ...revsStyle }]
+  // First, so nothing before it can push it out of the band; the board gives way to it.
+  const runs: Run[] = input.cacheBucket === '5m' ? [cacheRun(emoji), sep] : []
+  runs.push({ text: `${emoji ? `${ZONE_EMOJI[zone]} ` : ''}revs ${Math.round(reading.percent)}%${windowTag(reading.window)} `, ...revsStyle })
   if (emoji) {
     const lit = Math.min(BAR_CELLS, Math.max(0, Math.floor(reading.percent / (100 / BAR_CELLS))))
     for (let i = 0; i < BAR_CELLS; i++) runs.push(i < lit ? { text: '▮', color: cellColor(i) } : { text: '▯', dim: true })
@@ -291,6 +307,8 @@ let pitWait: { from: number } | null = null
 let pitTimer: { cancel: () => void } | null = null
 let gain = 0
 let gainAt = -1
+// The transcript of the current session, from classic.SessionStart; undefined until one is seen.
+let transcriptPath: string | undefined
 
 // The auto-pit ceiling pit published, in whole % of the window: null = auto-pit off, the nominal one until pit has said.
 function ceilingNow(): number | null {
@@ -312,7 +330,8 @@ const inputOf = (now: number): LineInput | null => {
   const zone = zoneOf(reading.tokens, reading.window, ceilingPct)
   const idleAt = idleVisible(now, reading.tokens)
   const message = pickBoard(board, now, zone, getPitBoard(), { ...(ceilingPct !== null ? { ceilingPct } : {}), ...(idleAt !== undefined ? { idleAt } : {}), emoji: mode === 'full' })
-  return { reading, lap, message, ceilingPct, now, flashAt, fuelFlashAt, delta, deltaAt, gain, gainAt }
+  const cacheBucket = getCacheBucket()
+  return { reading, lap, message, ceilingPct, now, flashAt, fuelFlashAt, delta, deltaAt, gain, gainAt, ...(cacheBucket !== undefined ? { cacheBucket } : {}) }
 }
 
 // The status-line text, or undefined while dash is off or has no reading yet (fresh session, just cleared).
@@ -486,6 +505,23 @@ function noteCaught($: EngineInterface, hook: string, error: { kind: string; mes
   }
 }
 
+// The cache TTL bucket from the transcript's tail, once per main-loop turn. No path, a failed or cut read, or no record that wrote the cache: the previous value stays.
+// The path is one argv element, never a shell string. $.process is CLI only: elsewhere the call fails and the warning simply never shows.
+async function readCacheBucket($: EngineInterface) {
+  if (mode === 'off' || transcriptPath === undefined) return
+  try {
+    const out = await $.process.run(['tail', '-c', String(CACHE_TAIL_BYTES), transcriptPath], { timeoutMs: CACHE_TAIL_MS })
+    if (out.exitCode !== 0 || out.isStdoutTruncated) return
+    const bucket = bucketOf(out.stdout)
+    if (bucket === null || bucket === getCacheBucket()) return
+    setCacheBucket(bucket)
+    nowMs = await $.clock.now()
+    repaint($)
+  } catch (err) {
+    noteCaught($, 'cache tail', { kind: 'failed', message: String(err) })
+  }
+}
+
 // `dash` (full | ascii | off, default full) is one /config choice row; a change applies at once through the config.set hook.
 export function registerDash(on: On, userOptions: PluginOptions) {
   mode = modeOf(userOptions.dash)
@@ -510,6 +546,8 @@ export function registerDash(on: On, userOptions: PluginOptions) {
   pitTimer = null
   gain = 0
   gainAt = -1
+  transcriptPath = undefined
+  setCacheBucket(undefined)
 
   // Applied the moment the row changes: the line is redrawn (or cleared) without waiting for a measure.
   on('config.set', { key: DASH_KEY }, async ($, e, next) => {
@@ -545,6 +583,8 @@ export function registerDash(on: On, userOptions: PluginOptions) {
       const usage = await $.session.usage({ breakdown: 'summary' })
       await ingest($, usage.context, usage.rateLimits)
     }
+    // The end of a main-loop turn is the one place the tail is read; this is the unmatched turn.complete hook, so the read lives here.
+    if (e.agentId === undefined) await readCacheBucket($)
     return next(e)
   }).catch(($, e, next) => {
     noteCaught($, 'turn.complete', next.error)
@@ -574,6 +614,9 @@ export function registerDash(on: On, userOptions: PluginOptions) {
       fuelShown = false
       delta = 0
       deltaAt = -1
+      // The transcript changes with the window (a /clear opens a new file): the old bucket says nothing about it.
+      transcriptPath = e.transcript_path || undefined
+      setCacheBucket(undefined)
       if (source === 'startup' || source === 'resume' || source === 'fork') {
         pitFrom = null
         pitWait = null

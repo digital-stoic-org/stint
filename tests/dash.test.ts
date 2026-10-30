@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Board } from '../types'
-import { BASE_WINDOW, DASH_MODES, FLASH_MS, HARD_MESSAGE, LINE_MAX, PIT_DONE_TOAST, PIT_WAIT_MS, TOAST_MS, bar, buildRuns, canToast, ceilingMessage, clockText, cols, fit, flashing, fuelOf, idleText, modeOf, pickBoard, pitDoneText, renderLine, thresholdsOf, toastText, windowTag, zoneOf } from '../hooks/dash.ts'
+import { BASE_WINDOW, CACHE_TAIL_BYTES, CACHE_WARNING, CACHE_WARNING_ASCII, DASH_MODES, FLASH_MS, HARD_MESSAGE, LINE_MAX, PIT_DONE_TOAST, PIT_WAIT_MS, TOAST_MS, bar, buildRuns, cacheRun, canToast, ceilingMessage, clockText, cols, fit, flashing, fuelOf, idleText, modeOf, pickBoard, pitDoneText, renderLine, thresholdsOf, toastText, windowTag, zoneOf } from '../hooks/dash.ts'
 import { assemble, parseFork, parseForkBody, stintOf } from '../hooks/pit.ts'
 
 // ---------- pure functions ----------
@@ -1020,4 +1020,203 @@ test('idle timer in ascii: no pause mark', { options: { dash: 'ascii' } }, async
   await w.clock.advance(SHOW_MS + 1)
   expect(last(w)).toBe(`revs 45% ####...... | board auto-pit ${clockText(START + IDLE_MS)}`)
   expect(/^[\x20-\x7e]*$/.test(last(w) ?? '')).toBe(true)
+})
+
+// ---------- the cache TTL warning: a 5 min bucket puts it first on the band ----------
+
+const text = (runs: { text: string }[]) => runs.map(r => r.text).join('')
+const WARN_ORANGE = { text: CACHE_WARNING, bold: true, color: '#f97316' }
+
+test('cols: the warning sign counts two columns, as written with its variation selector', () => {
+  expect(cols('⚠️')).toBe(2)
+  expect(cols(CACHE_WARNING)).toBe(cols('cache 5 min · auto-pit rebuilds the context') + 3)
+  expect(cols(CACHE_WARNING_ASCII)).toBe(12)
+})
+
+test('cacheRun: bold orange with emoji, bold only in ascii', () => {
+  expect(cacheRun(true)).toEqual(WARN_ORANGE)
+  expect(cacheRun(false)).toEqual({ text: '! cache 5min', bold: true })
+  expect(CACHE_WARNING).toBe('⚠️ cache 5 min · auto-pit rebuilds the context')
+})
+
+test('buildRuns: the 5 min bucket puts the warning first, whole, at any width; the board gives way, never the warning', () => {
+  const input = { reading: R(48), lap: 1, message: { text: 'x'.repeat(100), rank: 'warn' as const } }
+  const warn = { ...input, cacheBucket: '5m' as const }
+  for (const columns of [120, 80, 60, 40, 20]) {
+    const runs = buildRuns(warn, FULL, columns)
+    expect(runs[0]).toEqual(WARN_ORANGE)
+    expect(runs[1]).toEqual({ text: ' · ', dim: true })
+    expect(runs[2]!.text).toBe('🔥 revs 48% ')
+    // the board is what is cut: it shrinks to its minimum, the warning and the instruments are not
+    expect(cols(runs[runs.length - 1]!.text)).toBeGreaterThanOrEqual(12)
+    if (columns >= 120) expect(cols(text(runs))).toBeLessThanOrEqual(columns)
+  }
+  // 80 columns: the warning leaves the board less room than without it
+  const board = (runs: { text: string }[]) => runs[runs.length - 1]!.text
+  expect(cols(board(buildRuns(warn, FULL, 80)))).toBeLessThan(cols(board(buildRuns(input, FULL, 80))))
+  expect(text(buildRuns({ ...warn, message: null }, FULL, 110))).toBe(`${CACHE_WARNING} · 🔥 revs 48% ▮▮▮▮▯▯▯▯▯▯ · 📋 —`)
+  // everything else keeps its order behind it: fuel, stint
+  const full = buildRuns({ ...warn, lap: 3, reading: R(10, [{ kind: 'five_hour', percentUsed: 85 }]), message: null }, FULL, 200)
+  expect(text(full)).toBe(`${CACHE_WARNING} · 🚀 revs 10% ▮▯▯▯▯▯▯▯▯▯ · ⛽ 15% · 🏁 3 · 📋 —`)
+})
+
+test('buildRuns: ascii 5 min warning is ASCII only, no hex colour, first', () => {
+  const runs = buildRuns({ reading: R(70), lap: 1, message: null, cacheBucket: '5m' }, ASCII, 40)
+  expect(runs[0]).toEqual({ text: '! cache 5min', bold: true })
+  expect(text(runs)).toBe('! cache 5min | revs 70% #######... | board -')
+  expect(/^[\x20-\x7e]*$/.test(text(runs))).toBe(true)
+  expect(runs.every(r => r.color === undefined)).toBe(true)
+})
+
+test('buildRuns: no warning on the 1h bucket or when unknown', () => {
+  const base = { reading: R(48), lap: 1, message: null }
+  const plain = text(buildRuns(base, FULL, 110))
+  expect(plain.startsWith('🔥 revs 48%')).toBe(true)
+  expect(text(buildRuns({ ...base, cacheBucket: '1h' }, FULL, 110))).toBe(plain)
+  expect(text(buildRuns(base, ASCII, 110))).not.toContain('cache')
+  expect(text(buildRuns({ ...base, cacheBucket: '1h' }, ASCII, 110))).not.toContain('cache')
+})
+
+// A transcript tail as the host writes it; `tailOf('5m')` wrote the cache on the 5 min bucket, `tailOf('read')` is a pure cache-read turn.
+const tailOf = (kind: '1h' | '5m' | 'read') =>
+  JSON.stringify({ type: 'assistant', isSidechain: false, message: { usage: { cache_creation: { ephemeral_1h_input_tokens: kind === '1h' ? 800 : 0, ephemeral_5m_input_tokens: kind === '5m' ? 800 : 0 }, cache_read_input_tokens: 4000 } } }) + '\n'
+const TRANSCRIPT = '/home/u/.claude/projects/p q/abc.jsonl'
+type Tail = { stdout: string; exitCode?: number; truncated?: boolean } | 'throws'
+
+// process.run as the host answers it; `calls` records what was asked (argv and timeout only).
+function tailWorld(on: On) {
+  const t = { tail: { stdout: tailOf('5m') } as Tail, calls: [] as { argv: readonly string[]; timeoutMs: number | undefined }[] }
+  on('process.run', (_$, e) => {
+    t.calls.push({ argv: e.argv, timeoutMs: e.init?.timeoutMs })
+    if (t.tail === 'throws') throw new Error('no process api')
+    return { value: { exitCode: t.tail.exitCode ?? 0, stdout: t.tail.stdout, stderr: '', isStdoutTruncated: t.tail.truncated ?? false, isStderrTruncated: false } }
+  })
+  return t
+}
+const startAt = ($: Engine, source: 'startup' | 'clear' = 'startup') => $.classic.SessionStart({ source, transcript_path: TRANSCRIPT } as never)
+const mainTurn = ($: Engine, turnId = 't') => $.turn.complete({ answer: 'x', durationMs: 1, isAborted: false, turnId, reason: 'answer' })
+
+test('cache warning: a 5 min tail puts it first on the status line (no band), the path is one argv element, the read is short', async ($, on) => {
+  const w = world(on)
+  const t = tailWorld(on)
+  await startAt($)
+  await measure($, 48)
+  expect(last(w)).toBe('🔥 revs 48% ▮▮▮▮▯▯▯▯▯▯ · 📋 —')
+  expect(t.calls).toEqual([])
+  await mainTurn($)
+  expect(t.calls).toEqual([{ argv: ['tail', '-c', String(CACHE_TAIL_BYTES), TRANSCRIPT], timeoutMs: 3000 }])
+  expect(last(w)).toBe(`${CACHE_WARNING} · 🔥 revs 48% ▮▮▮▮▯▯▯▯▯▯ · 📋 —`)
+})
+
+test('cache warning: on the band it is the leftmost text, and gone when the bucket reads 1h; 5m -> 1h -> 5m flips it', async ($, on) => {
+  const w = world(on)
+  const t = tailWorld(on)
+  await startAt($)
+  await measure($, 29)
+  const ui = await mountBand($)
+  await mainTurn($, 't1')
+  let band = await bandText(ui)
+  expect(band.startsWith(CACHE_WARNING)).toBe(true)
+  expect(band).toContain('revs 29%')
+  // the status line stays empty while the band is up
+  expect(last(w)).toBeUndefined()
+  t.tail = { stdout: tailOf('1h') }
+  await mainTurn($, 't2')
+  band = await bandText(ui)
+  expect(band).not.toContain('cache')
+  expect(band.startsWith('🚀 revs 29%')).toBe(true)
+  t.tail = { stdout: tailOf('5m') }
+  await mainTurn($, 't3')
+  expect((await bandText(ui)).startsWith(CACHE_WARNING)).toBe(true)
+  await ui.unmount()
+})
+
+test('cache warning: a pure cache-read turn, a failed read, a cut read or a non-zero exit leave the last value; nothing is ever thrown', async ($, on) => {
+  const w = world(on)
+  const t = tailWorld(on)
+  await startAt($)
+  await measure($, 29)
+  // unknown at first: a read with no record, or any failure, shows nothing
+  for (const bad of [{ stdout: tailOf('read') }, { stdout: '' }, { stdout: tailOf('5m'), exitCode: 1 }, { stdout: tailOf('5m'), truncated: true }, 'throws' as const]) {
+    t.tail = bad
+    await mainTurn($)
+    expect(last(w)).toBe('🚀 revs 29% ▮▮▯▯▯▯▯▯▯▯ · 📋 —')
+  }
+  t.tail = { stdout: tailOf('5m') }
+  await mainTurn($)
+  expect(last(w)?.startsWith(CACHE_WARNING)).toBe(true)
+  // once set, the same failures leave it standing
+  for (const bad of [{ stdout: tailOf('read') }, { stdout: '' }, { stdout: tailOf('1h'), exitCode: 2 }, { stdout: tailOf('1h'), truncated: true }, 'throws' as const]) {
+    t.tail = bad
+    await mainTurn($)
+    expect(last(w)?.startsWith(CACHE_WARNING)).toBe(true)
+  }
+})
+
+test('cache warning: only the main loop reads the tail, and only when a transcript path was seen', async ($, on) => {
+  const w = world(on)
+  const t = tailWorld(on)
+  // a session start with no path (host did not give one): bucket unknown, no process
+  await $.classic.SessionStart({ source: 'startup' })
+  await measure($, 29)
+  await mainTurn($)
+  expect(t.calls).toHaveLength(0)
+  await startAt($)
+  await measure($, 29)
+  await $.turn.complete({ answer: 'x', durationMs: 1, isAborted: false, turnId: 'sub', agentId: 'a1', reason: 'answer' })
+  expect(t.calls).toHaveLength(0)
+  await mainTurn($)
+  expect(t.calls).toHaveLength(1)
+  expect(last(w)?.startsWith(CACHE_WARNING)).toBe(true)
+})
+
+test('cache warning: /clear forgets the bucket (a new transcript), the next turn reads the new file', async ($, on) => {
+  const w = world(on)
+  const t = tailWorld(on)
+  await startAt($)
+  await measure($, 29)
+  await mainTurn($)
+  expect(last(w)?.startsWith(CACHE_WARNING)).toBe(true)
+  await startAt($, 'clear')
+  await measure($, 5)
+  expect(last(w)).toBe('🚀 revs 5% ▯▯▯▯▯▯▯▯▯▯ · 📋 —')
+  t.tail = { stdout: tailOf('1h') }
+  await mainTurn($)
+  expect(last(w)).toBe('🚀 revs 5% ▯▯▯▯▯▯▯▯▯▯ · 📋 —')
+  expect(t.calls).toHaveLength(2)
+})
+
+test('cache warning in ascii: ASCII only on the status line', { options: { dash: 'ascii' } }, async ($, on) => {
+  const w = world(on)
+  tailWorld(on)
+  await startAt($)
+  await measure($, 70)
+  await mainTurn($)
+  expect(last(w)).toBe('! cache 5min | revs 70% #######... | board auto-pit at 80%')
+  expect(/^[\x20-\x7e]*$/.test(last(w) ?? '')).toBe(true)
+})
+
+test('cache warning: dash off draws nothing and spawns nothing', { options: { dash: 'off' } }, async ($, on) => {
+  const w = world(on)
+  const t = tailWorld(on)
+  await startAt($)
+  await measure($, 29)
+  await mainTurn($)
+  expect(t.calls).toHaveLength(0)
+  expect(w.statuses.filter(s => s !== undefined)).toHaveLength(0)
+})
+
+test('cache warning: switching dash off removes it at once and stops the reads', async ($, on) => {
+  const w = world(on)
+  on('config.set', { key: 'stint.dash' }, (_$, e) => ({ value: e.value }))
+  const t = tailWorld(on)
+  await startAt($)
+  await measure($, 29)
+  await mainTurn($)
+  expect(last(w)?.startsWith(CACHE_WARNING)).toBe(true)
+  await setDash($, 'off')
+  expect(last(w)).toBeUndefined()
+  await mainTurn($, 't2')
+  expect(t.calls).toHaveLength(1)
+  expect(last(w)).toBeUndefined()
 })
