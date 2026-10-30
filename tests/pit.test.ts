@@ -16,7 +16,9 @@ import {
   agentLinesOf,
   archiveName,
   archiveStamp,
+  ceilingPercent,
   ceilingSkip,
+  ceilingTokens,
   autoLine,
   autoUnpackRules,
   autopitDelayMs,
@@ -1021,7 +1023,9 @@ After my go, read the \`read_first\` files before acting.`)
 test('autoLine and autoUnpackRules: the ceiling variant, and the overwrite warning after the line', () => {
   const at = new Date(2026, 9, 29, 9, 7).getTime()
   const line = autoLine({ kind: 'ceiling', at, tokens: 141_400 }, '.stint/proj-notes.md')
-  expect(line).toBe('⛔ auto-pit (ceiling 70%) at 09:07 · 141k → notes .stint/proj-notes.md')
+  expect(line).toBe('⛔ auto-pit (ceiling 80%) at 09:07 · 141k → notes .stint/proj-notes.md')
+  // the wall can cap the ceiling under the nominal one: the line says the real one
+  expect(autoLine({ kind: 'ceiling', at, tokens: 150_400, pct: 75 }, '.stint/proj-notes.md')).toBe('⛔ auto-pit (ceiling 75%) at 09:07 · 150k → notes .stint/proj-notes.md')
   const rules = autoUnpackRules(line, 'ceiling')
   expect(rules).toContain(`exactly this, with nothing before it:\n${line}\nThen summarize`)
   expect(rules).toContain('saved and cleared automatically because the context was nearly full')
@@ -1036,12 +1040,31 @@ test('autoLine and autoUnpackRules: the ceiling variant, and the overwrite warni
   expect(injectText('n\n', line, 'ceiling', warn)).toBe(`n\n\n${withWarn}`)
 })
 
-const CGATE = { mode: 'on', saving: false, turnRunning: false, tokens: 140_000, window: 200_000, draft: '', busyAgents: 0 }
+const CGATE = { mode: 'on', saving: false, turnRunning: false, tokens: 160_000, window: 200_000, draft: '', busyAgents: 0 }
 
-test('ceilingSkip: the threshold is 70% of the window, every guard names its reason, unreadable skips', () => {
-  expect(AUTOPIT_CEILING).toBe(0.7)
+test('ceilingTokens and ceilingPercent: 80% of the window, capped by 90% of the wall, whole % rounded down', () => {
+  expect(AUTOPIT_CEILING).toBe(0.8)
+  // the wall is far: the window decides
+  expect(ceilingTokens(200_000, 200_000)).toBe(160_000)
+  expect(ceilingTokens(1_000_000, 967_000)).toBe(800_000)
+  expect(ceilingPercent(1_000_000, 967_000)).toBe(80)
+  // a 200k window compacts at ~167k: 90% of it is 150.3k = 75%
+  expect(ceilingTokens(200_000, 167_000)).toBe(150_300)
+  expect(ceilingPercent(200_000, 167_000)).toBe(75)
+  // 90% of the wall just over 80% of the window: the window decides; just under: the wall does, and the % rounds down
+  expect(ceilingTokens(100_000, 88_889)).toBe(80_000)
+  expect(ceilingPercent(100_000, 88_888)).toBe(79)
+  expect(ceilingPercent(100_000, 80_000)).toBe(72)
+})
+
+test('ceilingSkip: the threshold is 80% of the window, capped by 90% of the wall; every guard names its reason, unreadable skips', () => {
   expect(ceilingSkip(CGATE)).toBeNull()
-  expect(ceilingSkip({ ...CGATE, tokens: 139_999 })).toBe('context below the ceiling')
+  expect(ceilingSkip({ ...CGATE, tokens: 159_999 })).toBe('context below the ceiling')
+  // the wall caps it: 90% of 167k is 150.3k
+  expect(ceilingSkip({ ...CGATE, wall: 167_000, tokens: 150_299 })).toBe('context below the ceiling')
+  expect(ceilingSkip({ ...CGATE, wall: 167_000, tokens: 150_300 })).toBeNull()
+  // no wall, or an unreadable one: the window stands in
+  expect([null, 0, undefined].map(wall => ceilingSkip({ ...CGATE, wall: wall as never, tokens: 159_999 }))).toEqual(['context below the ceiling', 'context below the ceiling', 'context below the ceiling'])
   expect(ceilingSkip({ ...CGATE, tokens: null })).toBe('context size unknown')
   expect(ceilingSkip({ ...CGATE, window: null })).toBe('context size unknown')
   expect(ceilingSkip({ ...CGATE, window: 0 })).toBe('context size unknown')
@@ -1241,8 +1264,8 @@ test('auto-pit: /clear and a new session reset the idle clock; the manual /pit i
 
 // ---------- auto-pit (ceiling trigger) ----------
 
-// 70% of a 100k window: the ceiling is met, the idle trigger (80k) is not, so one trigger is tested at a time.
-const CEIL = { tokens: 70_000, wall: 100_000, window: 100_000 }
+// 80% of a 90k window: the ceiling is met, the idle trigger (80k) is not, so one trigger is tested at a time.
+const CEIL = { tokens: 72_000, wall: 90_000, window: 90_000 }
 const dirOf = (w: World) => `${w.root ?? CWD}/.stint/archive`
 const archived = (w: World) => [...w.files.keys()].filter(p => p.includes('/.stint/archive/')).sort()
 
@@ -1254,9 +1277,9 @@ async function ceilWorld($: Engine, on: On) {
   return w
 }
 
-test('ceiling: fires right after a turn at 70% and not at 69%; the fresh session opens with the ceiling line and the wait rules', async ($, on) => {
+test('ceiling: fires right after a turn at 80% and not under it; the fresh session opens with the ceiling line and the wait rules', async ($, on) => {
   const w = await ceilWorld($, on)
-  w.usage = { ...CEIL, tokens: 69_000 }
+  w.usage = { ...CEIL, tokens: 71_999 }
   await turnDone($)
   await w.clock.advance(5)
   expect(w.forkPrompts).toHaveLength(0)
@@ -1269,13 +1292,13 @@ test('ceiling: fires right after a turn at 70% and not at 69%; the fresh session
   expect(w.forkPrompts).toHaveLength(1)
   const notes = w.files.get(NOTES) ?? ''
   expect(notes).toContain('stream: proj')
-  expect(w.store.get('stint:pending')).toMatchObject({ stream: 'proj', auto: { kind: 'ceiling', tokens: 70_000 } })
+  expect(w.store.get('stint:pending')).toMatchObject({ stream: 'proj', auto: { kind: 'ceiling', tokens: 72_000, pct: 80 } })
   expect(w.store.get('stint:pending')).not.toHaveProperty('warn')
   await w.clock.advance(5)
   expect(w.clears).toBe(1)
   await clear($)
-  const line = autoLine({ kind: 'ceiling', at: 1_000_000, tokens: 70_000 }, '.stint/proj-notes.md')
-  expect(line).toMatch(/^⛔ auto-pit \(ceiling 70%\) at \d\d:\d\d · 70k → notes \.stint\/proj-notes\.md$/)
+  const line = autoLine({ kind: 'ceiling', at: 1_000_000, tokens: 72_000, pct: 80 }, '.stint/proj-notes.md')
+  expect(line).toMatch(/^⛔ auto-pit \(ceiling 80%\) at \d\d:\d\d · 72k → notes \.stint\/proj-notes\.md$/)
   expect(w.submits).toEqual([`${notes.trimEnd()}\n\n${autoUnpackRules(line, 'ceiling')}`])
 })
 
@@ -1353,12 +1376,12 @@ test('ceiling: the ready turn of an idle pit triggers neither the ceiling nor a 
   await w.clock.advance(IDLE_MS + 5)
   await clear($)
   expect(w.forkPrompts).toHaveLength(1)
-  w.usage = { tokens: 150_000, wall: 200_000 }
+  w.usage = { tokens: 160_000, wall: 200_000 }
   await typed($)
   await turnDone($)
   await w.clock.advance(IDLE_MS * 2)
   expect(w.forkPrompts).toHaveLength(1)
-  // control: the next turn end does fire the ceiling at 75%
+  // control: the next turn end does fire the ceiling at 80%
   await typed($)
   await turnDone($)
   await w.clock.advance(5)
@@ -1380,6 +1403,24 @@ test('ceiling: idle and ceiling never both fire, a ceiling pit cancels the idle 
   expect(w.forkPrompts).toHaveLength(1)
 })
 
+test('ceiling: the wall caps it under 80% on a 200k window; the mark and the line say the real %', async ($, on) => {
+  const w = world(on, OK())
+  // the host compacts at 167k: 90% of it is 150.3k, 75% of the window
+  w.usage = { tokens: 150_299, wall: 167_000 }
+  await fresh($)
+  await title($, 'proj')
+  await turnDone($)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(0)
+
+  w.usage = { tokens: 150_300, wall: 167_000 }
+  await typed($)
+  await turnDone($)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(1)
+  expect(w.store.get('stint:pending')).toMatchObject({ auto: { kind: 'ceiling', tokens: 150_300, pct: 75 } })
+})
+
 test('setting: an unknown value (on-40m) reads as the default on, 50 min', async ($, on) => {
   const w = world(on, OK())
   w.mode = 'on-40m'
@@ -1396,7 +1437,7 @@ test('setting: an unknown value (on-40m) reads as the default on, 50 min', async
 test('setting: off disables both triggers', async ($, on) => {
   const off = world(on, OK())
   off.mode = 'off'
-  off.usage = { tokens: 150_000, wall: 200_000 }
+  off.usage = { tokens: 170_000, wall: 200_000 }
   await fresh($)
   await title($, 'proj')
   await turnDone($)

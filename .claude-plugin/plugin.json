@@ -1,6 +1,6 @@
 {
   "name": "stint",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Run your agent in stints. Pit before the redline.",
   "author": {
     "name": "dstoic",
@@ -23,7 +23,7 @@
     "autopit": {
       "type": "string",
       "title": "stint · Auto-pit",
-      "description": "Pit by itself, in two cases. Idle trigger: the session sits idle for 50 min (before the 1 h prompt cache expires) with 80k tokens or more of context. Ceiling trigger: right after a turn, when the context is at 70% of the window or more. Both skip when a draft is in the prompt box or an agent is busy. The fresh session opens with one line (when, why, how big, where the notes are), a short summary, then waits for you. on: both triggers. off: never.",
+      "description": "Pit by itself, in two cases. Idle trigger: the session sits idle for 50 min (before the 1 h prompt cache expires) with 80k tokens or more of context. Ceiling trigger: right after a turn, when the context is at 80% of the window or more (or 90% of the point where the host compacts on its own, if that comes first). Both skip when a draft is in the prompt box or an agent is busy. The fresh session opens with one line (when, why, how big, where the notes are), a short summary, then waits for you. on: both triggers. off: never.",
       "default": "on",
       "options": [
         "on",

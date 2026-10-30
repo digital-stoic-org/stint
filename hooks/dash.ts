@@ -1,6 +1,6 @@
 import type { EngineInterface, On, PluginOptions, SessionContextUsage, SessionRateLimit } from 'claude-code'
 import type { Board } from '../types'
-import { getPitBoard, setBandUp, setDashLine, writeStatus } from './status.ts'
+import { AUTOPIT_CEILING, AUTOPIT_MIN_TOKENS, getAutopitInfo, getIdleFire, getPitBoard, setBandUp, setDashLine, writeStatus } from './status.ts'
 import type { PitBoard } from './status.ts'
 
 // dash (stint): the car's instruments, in a band above the prompt.
@@ -9,7 +9,8 @@ import type { PitBoard } from './status.ts'
 //   fuel   what is left of the tighter plan window (five_hour / seven_day); shown only below 30 %
 //   stint  the stint counter (notes header `stint`); shown from the second stint
 //   board  one short message from $.state { plugin: 'stint', key: 'board' }; `—` when empty
-// Two zones, on absolute tokens (80k soft, 120k hard, never past 40 % / 60 % of a small window). The measured auto-compaction wall is pit's own rail and is not read here.
+// Three zones: soft on absolute tokens (80k, never past 40 % of a small window), hard at 60 % of the window, and, while the auto-pit is on, a red one 10 points under its ceiling.
+// pit publishes the ceiling (capped by the auto-compaction wall) and the idle timer through status.ts; dash never reads the wall itself.
 // The band (terminal, desktop) is drawn by band.ts from bandRuns(); where it is never raised (vscode, mobile) the same line goes to the status line, which pit's lines win.
 // Figures come from session.measure; until that event is seen live, turn.complete + $.session.usage() gives the same reading once per turn.
 
@@ -17,7 +18,6 @@ const BOARD = { plugin: 'stint', key: 'board' } as const
 const LAP = { plugin: 'stint', key: 'lap' } as const
 
 export const SOFT_TOKENS = 80_000
-export const HARD_TOKENS = 120_000
 export const SOFT_PERCENT = 40
 export const HARD_PERCENT = 60
 export const BASE_WINDOW = 200_000
@@ -29,12 +29,14 @@ export const DELTA_DIM_MS = 2000
 // The board gives way first: revs, delta, fuel and the stint counter are never truncated.
 export const LINE_MAX = 80
 export const BOARD_MIN = 12
-export const REDLINE_MESSAGE = 'box this lap: /pit'
+export const HARD_MESSAGE = 'box this lap: /pit or --save'
+// The red zone starts this many points of the window under the auto-pit ceiling (never under the hard zone).
+export const PRE_CEILING_LEAD = 10
 export const PIT_DONE_TOAST = '✅ pit done · fresh window'
 // How long a finished pit waits for the first measure of the fresh context before it settles for the plain toast.
 export const PIT_WAIT_MS = 30_000
 
-export type Zone = 0 | 1 | 2
+export type Zone = 0 | 1 | 2 | 3
 export type Reading = { percent: number; tokens: number; window: number; rateLimits: readonly SessionRateLimit[] }
 export type DashOptions = { emoji: boolean }
 // The `dash` option: full = emoji band, ascii = ASCII-only band without hex colours, off = no band, no status line and no toasts.
@@ -46,7 +48,7 @@ export function modeOf(value: unknown): DashMode {
   return DASH_MODES.find(m => m === value) ?? 'full'
 }
 
-const ZONE_EMOJI = ['🚀', '🔥', '🚨'] as const
+const ZONE_EMOJI = ['🚀', '🔥', '🔶', '🚨'] as const
 const RED = '#ef4444'
 const ORANGE = '#f97316'
 const YELLOW = '#eab308'
@@ -58,13 +60,20 @@ const STOPS = [
 
 // ---------- pure helpers ----------
 
-// Soft and hard in tokens: 80k and 120k, capped by 40 % and 60 % of a window under 200k.
-export function thresholdsOf(window: number): { soft: number; hard: number } {
-  return { soft: Math.min(SOFT_TOKENS, (window * SOFT_PERCENT) / 100), hard: Math.min(HARD_TOKENS, (window * HARD_PERCENT) / 100) }
+// The nominal auto-pit ceiling, whole % of the window: what dash assumes until pit has published the real one.
+export const NOMINAL_CEILING_PCT = Math.round(AUTOPIT_CEILING * 100)
+
+// Soft in tokens (80k, capped by 40 % of a small window), hard at 60 % of the window, and the red zone `pre` (null while the auto-pit is off).
+// `ceilingPct`: the auto-pit ceiling in whole % of the window; null = auto-pit off. The red zone starts PRE_CEILING_LEAD points under it, and at hard when the ceiling is that low.
+export function thresholdsOf(window: number, ceilingPct: number | null = NOMINAL_CEILING_PCT): { soft: number; hard: number; pre: number | null } {
+  const hard = (window * HARD_PERCENT) / 100
+  const pre = ceilingPct === null ? null : (window * Math.max(HARD_PERCENT, ceilingPct - PRE_CEILING_LEAD)) / 100
+  return { soft: Math.min(SOFT_TOKENS, (window * SOFT_PERCENT) / 100), hard, pre }
 }
 
-export function zoneOf(tokens: number, window: number): Zone {
-  const { soft, hard } = thresholdsOf(window)
+export function zoneOf(tokens: number, window: number, ceilingPct: number | null = NOMINAL_CEILING_PCT): Zone {
+  const { soft, hard, pre } = thresholdsOf(window, ceilingPct)
+  if (pre !== null && tokens >= pre) return 3
   if (tokens >= hard) return 2
   if (tokens >= soft) return 1
   return 0
@@ -104,15 +113,43 @@ export function fuelOf(rateLimits: readonly SessionRateLimit[]): number | null {
 export type Message = { text: string; rank: 'info' | 'warn' | 'redline' | 'alert' | 'pit'; bad?: boolean }
 const RANK = { info: 0, warn: 1, redline: 2, alert: 3, pit: 4 } as const
 
-// The slot's message: alert > redline > warn > info; a stored board message past its `until` is gone.
-export function pickBoard(stored: Board | undefined, now: number, inHard: boolean, pit?: PitBoard): Message | null {
+export const ceilingMessage = (pct: number) => `auto-pit at ${pct}%`
+
+// Local HH:MM of an epoch ms.
+export function clockText(ms: number): string {
+  const d = new Date(ms)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+// The idle timer on the board: alone, or after a zone's text (the zone's text is already about the auto-pit or the pit).
+export const idleText = (at: number, emoji: boolean) => (emoji ? `⏸ auto-pit ${clockText(at)}` : `auto-pit ${clockText(at)}`)
+const idleTail = (at: number, emoji: boolean) => (emoji ? ` · ⏸ ${clockText(at)}` : ` - at ${clockText(at)}`)
+
+export type BoardOptions = {
+  // the effective auto-pit ceiling shown by the red zone, whole % of the window
+  ceilingPct?: number
+  // when the visible idle timer fires (epoch ms); absent = nothing to show
+  idleAt?: number
+  emoji?: boolean
+}
+
+// The slot's message: pit > alert > redline > warn > info; a stored board message past its `until` is gone.
+// The hard zone speaks as a warn, the red zone (zone 3) as a redline; on a tie the zone wins over a stored message.
+// The idle timer is the lowest info; after a zone's text it is appended, the zone's rank and colour kept.
+export function pickBoard(stored: Board | undefined, now: number, zone: Zone, pit?: PitBoard, options: BoardOptions = {}): Message | null {
   const live = stored && (stored.until === undefined || stored.until > now) && stored.text.trim() !== '' ? stored : undefined
-  const candidates: Message[] = []
+  const emoji = options.emoji ?? true
+  const candidates: (Message & { zone?: true })[] = []
+  if (zone === 2) candidates.push({ text: HARD_MESSAGE, rank: 'warn', zone: true })
+  if (zone === 3) candidates.push({ text: ceilingMessage(options.ceilingPct ?? NOMINAL_CEILING_PCT), rank: 'redline', zone: true })
   if (live) candidates.push({ text: live.text.replace(/\s+/g, ' ').trim(), rank: live.level })
-  if (inHard) candidates.push({ text: REDLINE_MESSAGE, rank: 'redline' })
   if (pit) candidates.push({ text: pit.text, rank: 'pit', bad: pit.bad === true })
+  if (options.idleAt !== undefined) candidates.push({ text: idleText(options.idleAt, emoji), rank: 'info' })
   candidates.sort((a, b) => RANK[b.rank] - RANK[a.rank])
-  return candidates[0] ?? null
+  const top = candidates[0]
+  if (!top) return null
+  const { zone: isZone, ...message } = top
+  return isZone && options.idleAt !== undefined ? { ...message, text: message.text + idleTail(options.idleAt, emoji) } : message
 }
 
 // Terminal columns, roughly: emoji take two, the variation selector none.
@@ -142,6 +179,8 @@ export type LineInput = {
   reading: Reading
   lap: number
   message: Message | null
+  // The auto-pit ceiling in whole % of the window; null = auto-pit off (no red zone); absent = the nominal one.
+  ceilingPct?: number | null
   // Epoch ms of the draw and of the events that flash or show for a while; -1 = never.
   now?: number
   flashAt?: number
@@ -160,13 +199,13 @@ const widthOf = (runs: readonly Run[]) => runs.reduce((n, r) => n + cols(r.text)
 export function buildRuns(input: LineInput, { emoji }: DashOptions, columns: number): Run[] {
   const { reading, lap, message } = input
   const now = input.now ?? 0
-  const zone = zoneOf(reading.tokens, reading.window)
+  const zone = zoneOf(reading.tokens, reading.window, input.ceilingPct)
   const fuel = fuelOf(reading.rateLimits)
   const sep: Run = { text: emoji ? ' · ' : ' | ', dim: true }
   const hot = (hex: string): Partial<Run> => (emoji ? { color: hex } : {})
   const flash: Partial<Run> = { bold: true, inverse: true }
 
-  const zoneStyle: Partial<Run> = zone === 2 ? { bold: true, ...hot(RED) } : zone === 1 ? hot(ORANGE) : {}
+  const zoneStyle: Partial<Run> = zone === 3 ? { bold: true, ...hot(RED) } : zone === 2 ? { bold: true, ...hot(ORANGE) } : zone === 1 ? hot(ORANGE) : {}
   const revsStyle = flashing(now, input.flashAt ?? -1) ? flash : zoneStyle
   const runs: Run[] = [{ text: `${emoji ? `${ZONE_EMOJI[zone]} ` : ''}revs ${Math.round(reading.percent)}%${windowTag(reading.window)} `, ...revsStyle }]
   if (emoji) {
@@ -195,12 +234,14 @@ export function renderLine(input: LineInput, options: DashOptions): string {
   return buildRuns(input, options, LINE_MAX).map(r => r.text).join('')
 }
 
-export function toastText(zone: Zone, reading: Pick<Reading, 'percent' | 'window'>, emoji: boolean): string | null {
+// `autopit` off: the soft zone keeps "plan your pit". `ceilingPct`: what the red zone says the auto-pit waits for.
+export function toastText(zone: Zone, reading: Pick<Reading, 'percent' | 'window'>, emoji: boolean, options: { autopit?: boolean; ceilingPct?: number } = {}): string | null {
   const mark = (z: Zone) => (emoji ? `${ZONE_EMOJI[z]} ` : '')
   const dot = emoji ? '·' : '-'
   const revs = `revs ${Math.round(reading.percent)}%${windowTag(reading.window)}`
-  if (zone === 1) return `${mark(1)}${revs} ${dot} plan your pit`
-  if (zone === 2) return `${mark(2)}${revs} ${dot} REDLINE ${dot} ${REDLINE_MESSAGE}`
+  if (zone === 1) return `${mark(1)}${revs} ${dot} ${options.autopit === false ? 'plan your pit' : 'auto-pit armed'}`
+  if (zone === 2) return `${revs} ${dot} ${HARD_MESSAGE}`
+  if (zone === 3) return `${mark(3)}${revs} ${dot} ${ceilingMessage(options.ceilingPct ?? NOMINAL_CEILING_PCT)}`
   return null
 }
 
@@ -233,6 +274,8 @@ let lastZone: Zone | undefined
 // session.measure has fired at least once: the turn.complete fallback stands down.
 let measured = false
 let boardTimer: { cancel: () => void } | null = null
+// The board's reveal of the idle timer (pit armed it; it shows from AUTOPIT_SHOW_AFTER_MS of inactivity).
+let idleTimer: { cancel: () => void } | null = null
 // What the band shows for a while: the zone-crossing flash, the fuel reveal flash, the last rise.
 let flashAt = -1
 let fuelFlashAt = -1
@@ -249,8 +292,28 @@ let pitTimer: { cancel: () => void } | null = null
 let gain = 0
 let gainAt = -1
 
-const inputOf = (now: number): LineInput | null =>
-  reading === null ? null : { reading, lap, message: pickBoard(board, now, zoneOf(reading.tokens, reading.window) === 2, getPitBoard()), now, flashAt, fuelFlashAt, delta, deltaAt, gain, gainAt }
+// The auto-pit ceiling pit published, in whole % of the window: null = auto-pit off, the nominal one until pit has said.
+function ceilingNow(): number | null {
+  const info = getAutopitInfo()
+  if (info === undefined) return NOMINAL_CEILING_PCT
+  return info.on ? (info.ceilingPct ?? NOMINAL_CEILING_PCT) : null
+}
+
+// When the idle timer fires, if the board shows it now: armed (pit published it), auto-pit on, the context big enough for the pit to run, and the person away long enough.
+function idleVisible(now: number, tokens: number): number | undefined {
+  const fire = getIdleFire()
+  if (fire === undefined || getAutopitInfo()?.on === false || tokens < AUTOPIT_MIN_TOKENS) return undefined
+  return now >= fire.showAt && now < fire.fireAt ? fire.fireAt : undefined
+}
+
+const inputOf = (now: number): LineInput | null => {
+  if (reading === null) return null
+  const ceilingPct = ceilingNow()
+  const zone = zoneOf(reading.tokens, reading.window, ceilingPct)
+  const idleAt = idleVisible(now, reading.tokens)
+  const message = pickBoard(board, now, zone, getPitBoard(), { ...(ceilingPct !== null ? { ceilingPct } : {}), ...(idleAt !== undefined ? { idleAt } : {}), emoji: mode === 'full' })
+  return { reading, lap, message, ceilingPct, now, flashAt, fuelFlashAt, delta, deltaAt, gain, gainAt }
+}
 
 // The status-line text, or undefined while dash is off or has no reading yet (fresh session, just cleared).
 export function dashLine(): string | undefined {
@@ -343,6 +406,23 @@ function redrawIn($: EngineInterface, ms: number) {
   })
 }
 
+// pit calls this when the auto-pit facts changed (ceiling, setting, idle timer armed or dropped): the figures are redrawn, and the idle timer's reveal is scheduled.
+export async function refresh($: EngineInterface) {
+  if (mode === 'off') return
+  nowMs = await $.clock.now()
+  idleTimer?.cancel()
+  idleTimer = null
+  const fire = getIdleFire()
+  if (fire !== undefined && nowMs < fire.showAt) {
+    idleTimer = $.clock.after(fire.showAt - nowMs + 1, async () => {
+      idleTimer = null
+      nowMs = await $.clock.now()
+      repaint($)
+    })
+  }
+  repaint($)
+}
+
 function armBoardTimer($: EngineInterface) {
   boardTimer?.cancel()
   boardTimer = null
@@ -385,12 +465,13 @@ async function ingest($: EngineInterface, context: SessionContextUsage, rateLimi
   }
   fuelShown = showFuel
 
-  const zone = zoneOf(reading.tokens, window)
+  const ceilingPct = ceilingNow()
+  const zone = zoneOf(reading.tokens, window, ceilingPct)
   if (lastZone !== undefined && zone > lastZone) {
     flashAt = nowMs
     redrawIn($, FLASH_MS)
-    const text = toastText(zone, reading, mode === 'full')
-    if (text) await announce($, text, zone === 2 ? 'redline' : 'zone')
+    const text = toastText(zone, reading, mode === 'full', { autopit: ceilingPct !== null, ...(ceilingPct !== null ? { ceilingPct } : {}) })
+    if (text) await announce($, text, zone >= 2 ? 'redline' : 'zone')
   }
   lastZone = zone
   await settlePit($, percent)
@@ -415,6 +496,7 @@ export function registerDash(on: On, userOptions: PluginOptions) {
   lastZone = undefined
   measured = false
   boardTimer = null
+  idleTimer = null
   flashAt = -1
   fuelFlashAt = -1
   fuelShown = false

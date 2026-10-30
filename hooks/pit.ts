@@ -1,8 +1,11 @@
 import type { EngineInterface, On } from 'claude-code'
 
-import { pitDone, pitStart, setLap } from './dash.ts'
+import { pitDone, pitStart, refresh as refreshDash, setLap } from './dash.ts'
 import { debugOn, sidNow, startWatch, stopWatch, trace, writeReport } from './debug.ts'
-import { setPitBoard, setPitLine, writeStatus } from './status.ts'
+import { AUTOPIT_CEILING, AUTOPIT_MIN_TOKENS, getAutopitInfo, getIdleFire, setAutopitInfo, setIdleFire, setPitBoard, setPitLine, writeStatus } from './status.ts'
+import type { AutopitInfo } from './status.ts'
+
+export { AUTOPIT_CEILING, AUTOPIT_MIN_TOKENS }
 
 // pit (stint): one mod, two commands.
 //   /pit [stream]      save notes (awaited fork) -> /clear (automatic) -> notes re-injected as the first message of the fresh context
@@ -151,12 +154,22 @@ export function overWall(tokens: number, wall: number): boolean {
 export const AUTOPIT_KEY = 'stint.autopit'
 export const AUTOPIT_DEFAULT = 'on'
 const AUTOPIT_DELAY_MIN: Record<string, number> = { on: 50 }
-// Absolute tokens: a window of 1M makes a percent meaningless here.
-export const AUTOPIT_MIN_TOKENS = 80_000
 // The main conversation's cache lives 1 h from its last request; a fire later than this (machine asleep) finds it dead.
 export const AUTOPIT_MAX_AGE_MS = 58 * 60 * 1000
-// Ceiling trigger: right after a turn, when the context is at or above this share of the window.
-export const AUTOPIT_CEILING = 0.7
+// The board shows the idle timer from this much inactivity on, until it fires.
+export const AUTOPIT_SHOW_AFTER_MS = 15 * 60 * 1000
+// Ceiling trigger (AUTOPIT_CEILING of the window, in status.ts) is capped by this share of the wall, where the host compacts on its own: a 200k window compacts well before 80%.
+export const CEILING_WALL_PCT = 90
+
+// The ceiling in tokens: the tighter of AUTOPIT_CEILING of the window and CEILING_WALL_PCT of the wall. Whole percents, so the edge values are exact.
+export function ceilingTokens(window: number, wall: number): number {
+  return Math.min((Math.round(AUTOPIT_CEILING * 100) * window) / 100, (CEILING_WALL_PCT * wall) / 100)
+}
+
+// The same ceiling as a whole % of the window, rounded down: what the board and the toast say ("auto-pit at 75%").
+export function ceilingPercent(window: number, wall: number): number {
+  return Math.floor((ceilingTokens(window, wall) / window) * 100 + 1e-9)
+}
 
 // null = off; else the idle wait before the pit, in ms.
 export function autopitDelayMs(mode: unknown): number | null {
@@ -196,13 +209,14 @@ export function autopitSkip(g: AutopitGate): string | null {
 // What the fresh session shows for an auto-pit: when it fired, how long idle (idle trigger only), how big the context was.
 // A mark stored without `kind` (an older pending) is an idle one.
 export type AutoKind = 'idle' | 'ceiling'
-export type AutoMark = { kind: 'idle'; at: number; idleMin: number; tokens: number } | { kind: 'ceiling'; at: number; tokens: number }
+// `pct` of a ceiling mark: the effective ceiling in % of the window (the wall may cap it under the nominal one).
+export type AutoMark = { kind: 'idle'; at: number; idleMin: number; tokens: number } | { kind: 'ceiling'; at: number; tokens: number; pct?: number }
 
 export function autoLine(mark: AutoMark, path: string): string {
   const d = new Date(mark.at)
   const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`
   const k = Math.round(mark.tokens / 1000)
-  if (mark.kind === 'ceiling') return `⛔ auto-pit (ceiling ${Math.round(AUTOPIT_CEILING * 100)}%) at ${hm} · ${k}k → notes ${path}`
+  if (mark.kind === 'ceiling') return `⛔ auto-pit (ceiling ${mark.pct ?? Math.round(AUTOPIT_CEILING * 100)}%) at ${hm} · ${k}k → notes ${path}`
   return `⏸ auto-pit at ${hm} · ${mark.idleMin} min idle · ${k}k → notes ${path}`
 }
 
@@ -213,6 +227,8 @@ export type CeilingGate = {
   turnRunning: boolean
   tokens: number | null
   window: number | null
+  // where the host compacts on its own; absent or unreadable = the window
+  wall?: number | null
   draft: string | null
   busyAgents: number | null
 }
@@ -222,7 +238,7 @@ export const CEILING_BELOW = 'context below the ceiling'
 // The reason to skip, or null when every guard holds. CEILING_BELOW is the quiet one (nothing to say, not a skip worth tracing).
 export function ceilingSkip(g: CeilingGate): string | null {
   if (g.tokens === null || g.window === null || !(g.window > 0)) return 'context size unknown'
-  if (g.tokens / g.window < AUTOPIT_CEILING) return CEILING_BELOW
+  if (g.tokens < ceilingTokens(g.window, typeof g.wall === 'number' && g.wall > 0 ? g.wall : g.window)) return CEILING_BELOW
   if (autopitDelayMs(g.mode) === null) return 'setting is off'
   if (g.saving) return 'a pit is already running'
   if (g.turnRunning) return 'a turn is running'
@@ -819,10 +835,35 @@ async function savedOnly($: EngineInterface, stream: string, built: { state: str
 // Armed at the end of each main-loop turn, cancelled by the next prompt or turn. At the fire every guard of autopitSkip() is read; any miss skips (no postponing).
 // The pit itself is runPit(), unchanged. A timer callback is outside any command.run hook, so the host allows the fork, the /clear and the submit from it.
 
-function cancelAutopit() {
+function cancelAutopit($: EngineInterface) {
   armGen++
   autopitTimer?.cancel()
   autopitTimer = null
+  dropIdleFire($)
+}
+
+// The board shows the idle timer between showAt and fireAt; nothing is armed, so nothing to show.
+function dropIdleFire($: EngineInterface) {
+  if (getIdleFire() === undefined) return
+  setIdleFire(undefined)
+  refreshDash($).catch(err => $.ui.log(`stint: dash not refreshed: ${String(err)}`, { to: 'debug' }))
+}
+
+// The effective ceiling (% of the window) of the last turn end; the wall can move, so it is read again each time.
+let ceilingPct: number | undefined
+
+// What dash needs to know of the auto-pit: on or off, and the effective ceiling. Dash redraws only when it changed.
+async function publishAutopit($: EngineInterface) {
+  try {
+    const on = autopitDelayMs(await modeNow($)) !== null
+    const next: AutopitInfo = on && ceilingPct !== undefined ? { on, ceilingPct } : { on }
+    const prev = getAutopitInfo()
+    if (prev?.on === next.on && prev?.ceilingPct === next.ceilingPct) return
+    setAutopitInfo(next)
+    await refreshDash($)
+  } catch (err) {
+    $.ui.log(`stint: dash not told of the auto-pit: ${String(err)}`, { to: 'debug' })
+  }
 }
 
 async function modeNow($: EngineInterface): Promise<string> {
@@ -838,14 +879,21 @@ async function modeNow($: EngineInterface): Promise<string> {
 
 // `spentMs`: idle time already behind us (a setting changed mid-wait).
 async function armAutopit($: EngineInterface, spentMs = 0) {
-  cancelAutopit()
+  cancelAutopit($)
   const gen = armGen
   const delay = autopitDelayMs(await modeNow($))
   if (delay === null || gen !== armGen) return
-  autopitTimer = $.clock.after(Math.max(0, delay - spentMs), () => {
+  const at = await $.clock.now()
+  if (gen !== armGen) return
+  const wait = Math.max(0, delay - spentMs)
+  autopitTimer = $.clock.after(wait, () => {
     autopitTimer = null
+    dropIdleFire($)
     void autoPit($)
   })
+  // Counted from the last turn end (at - spentMs), the board shows the timer once the person has been away AUTOPIT_SHOW_AFTER_MS.
+  setIdleFire({ fireAt: at + wait, showAt: Math.min(at + wait, at - spentMs + AUTOPIT_SHOW_AFTER_MS) })
+  await refreshDash($)
 }
 
 async function autoPit($: EngineInterface) {
@@ -887,16 +935,22 @@ async function ceilingPit($: EngineInterface) {
   try {
     let tokens: number | null = null
     let win: number | null = null
+    let wall: number | null = null
     try {
-      const { context } = await $.session.usage()
+      const { context } = await $.session.usage({ breakdown: 'summary' })
+      const b = context.breakdown
       tokens = context.tokens ?? null
       win = context.window
+      wall = b?.autoCompactThreshold ?? b?.rawMaxTokens ?? context.window
+      // dash says "auto-pit at N%" with the ceiling this very read gives
+      if (win > 0 && wall > 0) ceilingPct = ceilingPercent(win, wall)
     } catch {
       tokens = null
     }
+    await publishAutopit($)
     const mode = await modeNow($)
     // Read at call time: a prompt typed while the draft or the agents were being read must still skip.
-    const gate = (draft: string | null, busy: number | null): CeilingGate => ({ mode, saving, turnRunning, tokens, window: win, draft, busyAgents: busy })
+    const gate = (draft: string | null, busy: number | null): CeilingGate => ({ mode, saving, turnRunning, tokens, window: win, wall, draft, busyAgents: busy })
     let why = ceilingSkip(gate('', 0))
     if (why === CEILING_BELOW) return
     if (why === null) {
@@ -914,9 +968,9 @@ async function ceilingPit($: EngineInterface) {
       return
     }
     // The idle wait is over for this period: both triggers never fire.
-    cancelAutopit()
+    cancelAutopit($)
     trace($, 'autopit.fire', { tokens, trigger: 'ceiling' })
-    await runPit($, undefined, { kind: 'ceiling', at: await $.clock.now(), tokens })
+    await runPit($, undefined, { kind: 'ceiling', at: await $.clock.now(), tokens, ...(ceilingPct !== undefined ? { pct: ceilingPct } : {}) })
   } catch (err) {
     autoRunning = false
     $.ui.log(`stint: ceiling auto-pit failed: ${String(err)}`, { to: 'debug' })
@@ -1086,6 +1140,10 @@ async function noteTitle(title: string | undefined) {
 }
 
 export function registerPit(on: On) {
+  ceilingPct = undefined
+  setAutopitInfo(undefined)
+  setIdleFire(undefined)
+
   on('session.start', async ($, e, next) => {
     for (const command of COMMANDS) {
       try {
@@ -1110,6 +1168,7 @@ export function registerPit(on: On) {
         else {
           await armAutopit($)
           if (autopitDelayMs(await modeNow($)) !== null) $.clock.after(1, () => void ceilingPit($))
+          else await publishAutopit($)
         }
       } catch (err) {
         $.ui.log(`stint: auto-pit not armed: ${String(err)}`, { to: 'debug' })
@@ -1123,8 +1182,9 @@ export function registerPit(on: On) {
     if ('deny' in result && result.deny !== undefined) return result
     autopitMode = String(e.value)
     try {
-      if (autopitDelayMs(autopitMode) === null) cancelAutopit()
+      if (autopitDelayMs(autopitMode) === null) cancelAutopit($)
       else if (lastTurnAt !== null && !turnRunning && !skipNextArm) await armAutopit($, (await $.clock.now()) - lastTurnAt)
+      await publishAutopit($)
     } catch (err) {
       $.ui.log(`stint: auto-pit not re-armed: ${String(err)}`, { to: 'debug' })
     }
@@ -1145,7 +1205,7 @@ export function registerPit(on: On) {
   on('classic.UserPromptSubmit', async ($, e, next) => {
     // Any prompt, typed or injected, starts a turn and ends the idle period. One that lands while an auto-pit is saving aborts it before the /clear.
     turnRunning = true
-    cancelAutopit()
+    cancelAutopit($)
     if (autoRunning) autoAborted = true
     // The hint was seen: it goes at the first prompt.
     if (hint !== undefined) {
@@ -1164,10 +1224,11 @@ export function registerPit(on: On) {
     hint = undefined
     outcome = undefined
     // A new context: no idle period carries over, and the next turn.complete starts a fresh one.
-    cancelAutopit()
+    cancelAutopit($)
     lastTurnAt = null
     turnRunning = false
     autoRunning = false
+    await publishAutopit($)
     if (e.source !== 'clear') {
       skipNextArm = false
       // A new, resumed or forked session is another session: unbind and drop any armed injection.
