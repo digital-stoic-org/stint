@@ -15,6 +15,10 @@ import {
   WALL_CAP,
   agentLinesOf,
   archiveName,
+  autoStreamOf,
+  cursorOf,
+  idOf,
+  takeEntries,
   archiveStamp,
   ceilingPercent,
   ceilingSkip,
@@ -80,6 +84,8 @@ test('resolveStream: explicit binding > title > main', () => {
   expect(resolveStream('arg', 'title')).toBe('arg')
   expect(resolveStream(null, 'title')).toBe('title')
   expect(resolveStream(null, null)).toBe('main')
+  expect(resolveStream(null, null, 'work-a3f9')).toBe('work-a3f9')
+  expect(resolveStream(null, 'title', 'work-a3f9')).toBe('title')
 })
 
 test('notesPath: <cwd>/.stint/<stream>-notes.md', () => {
@@ -173,7 +179,8 @@ test('parseFork: ok, blocked with reason, malformed, empty', () => {
 
 test('parseForkBody: scalars and lists, unknown lines ignored, nothing parseable is null', () => {
   const fields = parseForkBody(FORK_LINES.join('\n') + '\nretire_done: c01\nnoise')
-  expect(fields?.scalars).toEqual({ status: 'building', goal: 'ship v2', deliverable: '/w/out.md' })
+  // retire keys are fork scalars since L5
+  expect(fields?.scalars).toEqual({ status: 'building', goal: 'ship v2', deliverable: '/w/out.md', retire_done: 'c01' })
   expect(fields?.lists.read_first).toEqual(['/w/spec.md — the spec'])
   expect(fields?.lists.next).toEqual(['write tests'])
   expect(fields?.lists).not.toHaveProperty('retire_done')
@@ -186,16 +193,17 @@ test('assemble: header scalars, body in order, ends with a newline', () => {
   const r = assemble0()
   expect(r.kind).toBe('ok')
   const state = r.kind === 'ok' ? r.state : ''
-  expect(state.split('\n').slice(0, 5)).toEqual([
+  expect(state.split('\n').slice(0, 7)).toEqual([
     'stream: proj',
     'saved: 2026-10-22T10:00:00.000Z s2',
     'status: building',
     'previous_session: none',
     'goal: ship v2',
+    'journal: none',
+    'journal_cursor: c00',
   ])
   const keys = state.split('\n').filter(l => /^[a-z_]+:/.test(l)).map(l => l.split(':')[0])
-  expect(keys).toEqual(['stream', 'saved', 'status', 'previous_session', 'goal', 'read_first', 'read_if_needed', 'deliverable', 'decisions', 'learnings', 'discarded', 'in_progress', 'next', 'unknowns', 'stale'])
-  expect(state).not.toContain('journal')
+  expect(keys).toEqual(['stream', 'saved', 'status', 'previous_session', 'goal', 'journal', 'journal_cursor', 'read_first', 'read_if_needed', 'deliverable', 'decisions', 'learnings', 'discarded', 'in_progress', 'next', 'unknowns', 'stale'])
   expect(state.endsWith('\n')).toBe(true)
   expect(r.kind === 'ok' && r.degraded).toBe(false)
 })
@@ -279,7 +287,9 @@ test('cap: read_if_needed is compressed first, then stale, in_progress, discarde
   const order = ['stale', 'in_progress', 'discarded', 'learnings']
   expect(cutKeys).toEqual(order.filter(k => cutKeys.includes(k)))
   expect(cutKeys.slice(0, 2)).toEqual(['stale', 'in_progress'])
-  expect(section(r.state, 'stale')).toEqual([])
+  // stale holds nothing but the overflow line: from discarded on, every drop is named there
+  expect(section(r.state, 'stale')).toHaveLength(1)
+  expect(section(r.state, 'stale')[0]).toMatch(/^overflow: cut to fit 8000 chars: stale -10, in_progress -10, discarded -\d+$/)
   expect(section(r.state, 'in_progress')).toEqual([])
   expect(section(r.state, 'learnings')).toHaveLength(60)
   // never cut
@@ -293,7 +303,7 @@ test('cap: learnings are the last of the five; the oldest line goes first', () =
   expect(r.kind).toBe('ok')
   if (r.kind !== 'ok') return
   expect(r.cut.map(c => c.split(' ')[0])).toEqual(['stale', 'in_progress', 'discarded', 'learnings'])
-  expect(section(r.state, 'stale')).toEqual([])
+  expect(section(r.state, 'stale')).toEqual([expect.stringMatching(/^overflow: cut to fit 8000 chars: stale -5, in_progress -5, discarded -5, learnings -\d+$/)])
   const kept = section(r.state, 'learnings')
   expect(kept.length).toBeGreaterThan(0)
   expect(kept[0]).not.toContain('l000')
@@ -336,9 +346,162 @@ test('forkPrompt: previous notes are passed to merge; none says (none); the room
   expect(p).toContain('8,000 characters')
   expect(forkPrompt(null)).toContain('PREVIOUS NOTES:\n(none)')
   expect(forkPrompt('x'.repeat(7_000))).toContain('Room is tight')
-  expect(p).not.toContain('retire_')
+  // L5: the fork may designate retire ids; with no entry the journal block says (none)
+  expect(p).toContain('retire_reversed:')
+  expect(p).toContain('A line ending with (cNN) belongs to code')
+  expect(p).toContain('Never restate an item a (cNN) line or an entry below already holds, even reworded and without the id')
+  expect(p.endsWith('JOURNAL ENTRIES TO ROUTE (code copies their clauses; you may retire their ids):\n(none)')).toBe(true)
   expect(p).not.toContain('ckpt')
+  expect(forkPrompt(prev, [{ n: 3, id: 'c03', trailer: '<!-- ckpt decision: x -->' }])).toContain('ids):\n### c03\n<!-- ckpt decision: x -->')
   expect(parseNotes(prev).scalars.status).toBe('building')
+})
+
+// ---------- L5: journal entries in the notes (pure) ----------
+
+const ent = (n: number, body: string) => ({ n, id: `c${String(n).padStart(2, '0')}`, trailer: `<!-- ckpt ${body} -->` })
+const jEntry = (n: number, body: string) => `### c${String(n).padStart(2, '0')} 2026-11-02T10:00:00.000Z sess-0\n<!-- ckpt ${body} -->\n\n`
+type AsmE = { prev?: string | null; entries?: ReturnType<typeof ent>[]; cursorFrom?: number; agents?: string[] }
+const asmE = (lines: string[], extra: AsmE = {}) => {
+  const fork = parseForkBody(lines.length ? lines.join('\n') : 'status: building')
+  if (!fork) throw new Error('unparseable')
+  const r = assemble({ stream: 'proj', saved: '2026-11-02T10:00:00.000Z', sid: 's2', prev: extra.prev ?? null, fork, agents: extra.agents, entries: extra.entries, cursorFrom: extra.cursorFrom, journal: '/work/.stint/proj-journal.md' })
+  if (r.kind !== 'ok') throw new Error(r.reason)
+  return r
+}
+
+test('L5 routing: clauses copied verbatim with their id into ROUTE sections; reasoning and pivot stay in the journal; cursor = last id', () => {
+  const r = asmE(['decisions:', '- assemble by code — the fork cannot copy', 'unknowns:', '- does answer keep html comments'], {
+    entries: [
+      ent(1, 'decision: use code · reasoning: because x · learning: L1 · pivot: P1'),
+      { n: 2, id: 'c02', trailer: '<!-- ckpt\nrejected: tried A — too slow\nconstraint: no git\nopen: who owns X?\nassumption: cwd is stable\ndefinition: stream=named journal\nrefs: /w/a.md→§2\n-->' },
+    ],
+  })
+  expect(section(r.state, 'decisions')).toEqual(['use code (c01)', 'no git (c02)', 'assemble by code — the fork cannot copy'])
+  expect(section(r.state, 'learnings')).toEqual(['L1 (c01)', 'stream=named journal (c02)'])
+  expect(section(r.state, 'discarded')).toEqual(['tried A — too slow (c02)'])
+  expect(section(r.state, 'next')).toEqual(['who owns X? (c02)'])
+  expect(section(r.state, 'unknowns')).toEqual(['cwd is stable (c02)', 'does answer keep html comments'])
+  expect(section(r.state, 'read_if_needed')).toEqual(['/w/a.md→§2 (c02)'])
+  expect(r.state).not.toContain('because x')
+  expect(r.state).not.toContain('P1')
+  expect(r.state).toContain('journal: /work/.stint/proj-journal.md\njournal_cursor: c02')
+  expect(r.cursor).toBe('c02')
+})
+
+test('L5 retire: reversed decision -> discarded with its id, answered open/assumption gone; superseded, done, learned', () => {
+  const first = asmE([], { entries: [ent(1, 'decision: use A · open: who owns X? · assumption: cwd stable · learning: bug in X')] })
+  const r = asmE(['retire_reversed: c01', 'retire_answered: c01', 'retire_learned: c01'], { prev: first.state, entries: [ent(2, 'decision: use B instead · learning: X fixed')] })
+  expect(section(r.state, 'decisions')).toEqual(['use B instead (c02)'])
+  expect(section(r.state, 'discarded')).toEqual(['use A — reversed (c01)'])
+  expect(section(r.state, 'next')).toEqual([])
+  expect(section(r.state, 'unknowns')).toEqual(['nothing recorded — treat every fact as unverified'])
+  expect(section(r.state, 'learnings')).toEqual(['X fixed (c02)'])
+  expect(r.cursor).toBe('c02')
+  const s2 = asmE(['retire_superseded: c01', 'retire_done: c01'], { prev: first.state })
+  expect(section(s2.state, 'discarded')).toEqual(['use A — superseded (c01)'])
+  expect(section(s2.state, 'next')).toEqual([])
+  // carried next save: the moved line stays in discarded, code-owned
+  expect(section(asmE([], { prev: s2.state }).state, 'discarded')).toEqual(['use A — superseded (c01)'])
+})
+
+test('L5 fork lines: a line the fork ends with (cNN) is dropped, its own lines are kept, a decision without why is flagged', () => {
+  const r = asmE(['decisions:', '- no why here', '- stolen line (c42)', 'learnings:', '- mine — proof'], { entries: [ent(1, 'learning: from the trailer')] })
+  expect(section(r.state, 'decisions')).toEqual(['no why here — why missing'])
+  expect(section(r.state, 'learnings')).toEqual(['from the trailer (c01)', 'mine — proof'])
+  expect(r.state).not.toContain('c42')
+})
+
+test('L5 cursor: old notes without journal_cursor read 0; a cursor past the journal (trimmed by hand) starts over at 0', () => {
+  expect(cursorOf(null)).toBe(0)
+  expect(cursorOf('stream: proj\ngoal: g\n')).toBe(0)
+  expect(cursorOf('stream: proj\njournal_cursor: c07\n')).toBe(7)
+  expect(cursorOf('journal_cursor: junk')).toBe(0)
+  const journal = jEntry(1, 'decision: a') + jEntry(2, 'decision: b') + jEntry(3, 'decision: c')
+  expect(takeEntries('journal_cursor: c02', journal)).toMatchObject({ from: 2, entries: [{ id: 'c03' }] })
+  expect(takeEntries('journal_cursor: c03', journal)).toEqual({ from: 3, entries: [] })
+  expect(takeEntries('journal_cursor: c09', journal).from).toBe(0)
+  expect(takeEntries('journal_cursor: c09', journal).entries.map(e => e.id)).toEqual(['c01', 'c02', 'c03'])
+  expect(takeEntries('journal_cursor: c05', null)).toEqual({ from: 5, entries: [] })
+  // the reset cursor is what assemble writes from
+  const r = asmE([], { prev: 'stream: proj\njournal_cursor: c09\n', cursorFrom: 0, entries: [ent(1, 'decision: a')] })
+  expect(r.cursor).toBe('c01')
+  // no entry: the previous cursor is carried
+  expect(asmE([], { prev: 'stream: proj\njournal_cursor: c09\n' }).cursor).toBe('c09')
+})
+
+test('L5 dedupe: identical entries (a retried write) and a line already in the notes give one line, lowest id; retiring the duplicate id retires it', () => {
+  const r = asmE([], { entries: [ent(1, 'decision: keep A'), ent(2, 'decision:   keep  A'), ent(3, 'decision: Keep A')] })
+  // whitespace collapse only: a case difference is another line
+  expect(section(r.state, 'decisions')).toEqual(['keep A (c01)', 'Keep A (c03)'])
+  const again = asmE([], { prev: r.state, entries: [ent(4, 'decision: keep A')] })
+  expect(section(again.state, 'decisions')).toEqual(['keep A (c01)', 'Keep A (c03)'])
+  expect(again.cursor).toBe('c04')
+  // a lower id arriving later (cursor reset) takes the place of the higher one
+  const lower = asmE([], { prev: 'decisions:\n- keep A (c05)\n', cursorFrom: 0, entries: [ent(2, 'decision: keep A')] })
+  expect(section(lower.state, 'decisions')).toEqual(['keep A (c02)'])
+  const retired = asmE(['retire_reversed: c02'], { entries: [ent(1, 'decision: keep A'), ent(2, 'decision: keep A')] })
+  expect(section(retired.state, 'decisions')).toEqual([])
+  expect(section(retired.state, 'discarded')).toEqual(['keep A — reversed (c01)'])
+})
+
+// Previous notes near the cap: discarded c01-c02, learnings c03..c<n+2>, cursor on the last one.
+const nearCap = (n: number) =>
+  [
+    'stream: proj', 'saved: 2026-11-01T10:00:00.000Z s1', 'status: building', 'previous_session: none', 'goal: ship v2', 'journal: /work/.stint/proj-journal.md', `journal_cursor: c${String(n + 2).padStart(2, '0')}`, '',
+    'discarded:', '- tried D1 — slow (c01)', '- tried D2 — slow (c02)',
+    'learnings:', ...Array.from({ length: n }, (_, i) => `- L${i + 3} ${'y'.repeat(90)} (c${String(i + 3).padStart(2, '0')})`),
+  ].join('\n')
+
+test('L5 cap: discarded then learnings dropped oldest first, every dropped id named on the overflow line; the new entries survive', () => {
+  const prev = nearCap(74)
+  expect(prev.length).toBeGreaterThan(7_700)
+  const r = asmE([], { prev, entries: [77, 78, 79].map(n => ent(n, `learning: new ${n}`)) })
+  expect(r.state.length).toBeLessThanOrEqual(NOTES_MAX)
+  expect(r.cursor).toBe('c79')
+  expect(r.degraded).toBe(true)
+  expect(section(r.state, 'discarded')).toEqual([])
+  const learnings = section(r.state, 'learnings')
+  expect(learnings.slice(-3)).toEqual(['new 77 (c77)', 'new 78 (c78)', 'new 79 (c79)'])
+  expect(learnings.some(l => l.endsWith('(c03)'))).toBe(false)
+  expect(section(r.state, 'stale').at(-1)).toMatch(/^overflow: cut to fit 8000 chars: discarded -2, learnings -\d+; journal ids dropped: c01, c02, c03, .* — grep the journal by id$/)
+})
+
+test('L5 cap: the fork retires enough: nothing dropped, no overflow line', () => {
+  const ids = Array.from({ length: 20 }, (_, i) => `c${String(i + 3).padStart(2, '0')}`).join(', ')
+  const r = asmE([`retire_learned: ${ids}`], { prev: nearCap(74), entries: [77, 78, 79].map(n => ent(n, `learning: new ${n}`)) })
+  expect(r.state).not.toContain('overflow:')
+  expect(r.degraded).toBe(false)
+  expect(section(r.state, 'discarded')).toHaveLength(2)
+  expect(section(r.state, 'learnings')).toContain(`L23 ${'y'.repeat(90)} (c23)`)
+})
+
+test('L5 cap: past discarded and learnings, id\'d lines go lowest cNN first across sections, before any fork line; read_if_needed keeps its id when compressed', () => {
+  const entries = [
+    ...Array.from({ length: 30 }, (_, i) => ent(i + 1, `decision: d${i + 1} ${'x'.repeat(120)}`)),
+    ...Array.from({ length: 30 }, (_, i) => ent(i + 31, `open: n${i + 31} ${'x'.repeat(120)}`)),
+    ent(61, `refs: /r/${'z'.repeat(150)}`),
+  ]
+  const r = asmE(['decisions:', '- fork decision — mine', 'next:', '- fork next'], { entries })
+  expect(r.state.length).toBeLessThanOrEqual(NOTES_MAX)
+  expect(section(r.state, 'decisions')).toContain('fork decision — mine')
+  expect(section(r.state, 'next')).toContain('fork next')
+  const ids = [...r.state.matchAll(/\(c(\d+)\)$/gm)].map(m => Number(m[1]))
+  const overflow = section(r.state, 'stale').at(-1) ?? ''
+  const dropped = [...overflow.matchAll(/c(\d+)/g)].map(m => Number(m[1]))
+  // every id dropped is lower than every id kept in decisions/next
+  expect(Math.max(...dropped)).toBeLessThan(Math.min(...ids.filter(n => n <= 60)))
+  expect(dropped[0]).toBe(1)
+  const rin = section(r.state, 'read_if_needed')
+  expect(rin).toHaveLength(1)
+  expect(rin[0]).toMatch(/…\s\(c61\)$/)
+})
+
+test('L5 zero entries: the notes are the fork\'s lists, as before, with a c00 cursor', () => {
+  const r = asm()
+  expect(r.kind === 'ok' && section(r.state, 'decisions')).toEqual(['notes by one fork — simpler'])
+  expect(r.kind === 'ok' && r.state).toContain('journal_cursor: c00')
+  expect(idOf('x (c07)')).toBe(7)
+  expect(idOf('x c07')).toBeNull()
 })
 
 // ---------- flows against a stubbed engine ----------
@@ -568,10 +731,10 @@ test('pit: the stream binds for the session and survives /clear; the next pit wi
   expect(w.files.has('/work/.stint/main-notes.md')).toBe(false)
 })
 
-test('pit: stream = title (slugified) without argument, main without title', async ($, on) => {
+test('pit: stream = title (slugified) without argument, the session\'s own name without title', async ($, on) => {
   const w = world(on, OK())
   await fresh($)
-  expect((await pit($, '')).text).toBe('pit: saved .stint/main-notes.md')
+  expect((await pit($, '')).text).toBe('pit: saved .stint/work-sess-notes.md')
   await title($, 'Ship the v2 plugin')
   expect((await pit($, '')).text).toBe('pit: saved .stint/ship-the-v2-plugin-notes.md')
   expect(w.files.has('/work/.stint/ship-the-v2-plugin-notes.md')).toBe(true)
@@ -1674,15 +1837,15 @@ test('/pit --save: notes written, no /clear, no pending, nothing injected, the c
   expect(w.submits).toHaveLength(0)
 })
 
-test('/pit --save: binds the stream like /pit <stream>; without a stream it uses the bound one or main', async ($, on) => {
+test('/pit --save: binds the stream like /pit <stream>; without a stream it uses the bound one or the session\'s own name', async ($, on) => {
   const w = world(on, OK())
   await fresh($)
-  expect((await pit($, '--save')).text).toBe('pit: saved .stint/main-notes.md (no clear)')
+  expect((await pit($, '--save')).text).toBe('pit: saved .stint/work-sess-notes.md (no clear)')
   await pit($, 'proj --save')
   // bound for the session, saves and pits alike
   expect((await pit($, '--save')).text).toBe('pit: saved .stint/proj-notes.md (no clear)')
   expect((await pit($, '')).text).toBe('pit: saved .stint/proj-notes.md')
-  expect(w.files.has('/work/.stint/main-notes.md')).toBe(true)
+  expect(w.files.has('/work/.stint/work-sess-notes.md')).toBe(true)
 })
 
 test('/pit --save: the stint number of the notes stays; the next real pit hands over to the next one', async ($, on) => {
@@ -1831,12 +1994,12 @@ test('checkpoint: the journal is anchored on the session root, not the cwd', asy
   expect([...w.files.keys()].some(p => p.startsWith('/elsewhere'))).toBe(false)
 })
 
-test('checkpoint: before any title the stream is main', async ($, on) => {
+test('checkpoint: before any title the stream is the session\'s own name', async ($, on) => {
   const w = world(on, OK())
   withStat(w, on)
   await fresh($)
   await answer($, TRAIL1)
-  expect(w.files.has(`${CWD}/.stint/main-journal.md`)).toBe(true)
+  expect(w.files.has(`${CWD}/.stint/work-sess-journal.md`)).toBe(true)
 })
 
 test('checkpoint: an existing journal keeps its entries and the ids continue', async ($, on) => {
@@ -2010,4 +2173,212 @@ test('checkpoint off: the notes of a stream journaled earlier get no rule after 
   const sent = w.submits[0] ?? ''
   expect(sent).not.toContain(RULE_TEXT)
   expect(sent).not.toContain(journalRule(JOURNAL))
+})
+
+// ---------- L5: the notes take in the journal (flows) ----------
+
+test('L5 flow: a pit routes the journal entries; the next pit sends the fork only the entries after the cursor', async ($, on) => {
+  const w = world(on, OK())
+  withStat(w, on)
+  await fresh($)
+  await title($, 'proj')
+  await answer($, `Done.\n${TRAIL1}\n${TRAIL2}`)
+  await pit($)
+  const notes = w.files.get(NOTES) ?? ''
+  expect(section(notes, 'decisions')).toEqual(['keep A (c01)', 'notes by one fork — simpler'])
+  expect(section(notes, 'next')).toEqual(['which stream? (c02)', 'write tests'])
+  expect(notes).toContain(`journal: ${JOURNAL}\njournal_cursor: c02`)
+  expect(w.forkPrompts[0]).toContain(`### c01\n${TRAIL1}`)
+  expect(w.forkPrompts[0]).not.toContain(JOURNAL)
+  await clear($)
+  await answer($, 'More.\n<!-- ckpt learning: L3 -->')
+  w.forkText = OK([...FORK_LINES, 'retire_answered: c02'])
+  await pit($)
+  const next = w.files.get(NOTES) ?? ''
+  expect(w.forkPrompts[1]).toContain('### c03\n<!-- ckpt learning: L3 -->')
+  expect(w.forkPrompts[1]).not.toContain('### c01')
+  expect(w.forkPrompts[1]).toContain('PREVIOUS NOTES:\nstream: proj')
+  expect(section(next, 'decisions')).toEqual(['keep A (c01)', 'notes by one fork — simpler'])
+  expect(section(next, 'next')).toEqual(['write tests'])
+  expect(section(next, 'learnings')).toContain('L3 (c03)')
+  expect(next).toContain('journal_cursor: c03')
+})
+
+test('L5 flow: a fork that rewords a verbatim (cNN) line cannot replace it: the journal text stays, the paraphrase is dropped', async ($, on) => {
+  const w = world(on, OK(['status: building', 'decisions:', '- keep option A, roughly (c01)', '- keep A because B follows (c01)']))
+  withStat(w, on)
+  await fresh($)
+  await title($, 'proj')
+  await answer($, `Done.\n${TRAIL1}`)
+  await pit($)
+  const decisions = section(w.files.get(NOTES) ?? '', 'decisions')
+  // the exact clause text of the journal, nothing else carrying its id
+  expect(decisions).toEqual(['keep A (c01)'])
+  expect(decisions.filter(l => l.endsWith('(c01)'))).toEqual(['keep A (c01)'])
+  expect((w.files.get(NOTES) ?? '').includes('roughly')).toBe(false)
+})
+
+test('L5 flow: a trailer of the very turn that trips the ceiling reaches the auto-pit fork and the notes', async ($, on) => {
+  // ceilWorld, with fs.stat registered before the first $ call
+  const w = world(on, OK())
+  withStat(w, on)
+  w.usage = CEIL
+  await fresh($)
+  await title($, 'proj')
+  await typed($)
+  await answer($, `Done.\n<!-- ckpt decision: same turn — fork must see it -->`)
+  expect(w.forkPrompts).toHaveLength(0)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(1)
+  expect(w.forkPrompts[0]).toContain('### c01\n<!-- ckpt decision: same turn — fork must see it -->')
+  expect(section(w.files.get(NOTES) ?? '', 'decisions')).toContain('same turn — fork must see it (c01)')
+})
+
+test('L5 flow: /pit --save advances the cursor and keeps the stint number', async ($, on) => {
+  const w = world(on, OK())
+  withStat(w, on)
+  await fresh($)
+  await title($, 'proj')
+  await pit($, 'proj')
+  expect(parseNotes(w.files.get(NOTES) ?? '').scalars.stint).toBe('2')
+  await answer($, `x\n${TRAIL1}`)
+  await pit($, 'proj --save')
+  let notes = parseNotes(w.files.get(NOTES) ?? '')
+  expect(notes.scalars.journal_cursor).toBe('c01')
+  expect(notes.scalars.stint).toBe('2')
+  await answer($, `y\n${TRAIL2}`)
+  await pit($, 'proj --save')
+  notes = parseNotes(w.files.get(NOTES) ?? '')
+  expect(notes.scalars.journal_cursor).toBe('c02')
+  expect(notes.scalars.stint).toBe('2')
+  expect(w.forkPrompts[2]).toContain('### c02')
+  expect(w.forkPrompts[2]).not.toContain('### c01')
+})
+
+test('L5 flow: old notes without journal lines load by /rejoin and take the whole journal at the next pit (cursor 0)', async ($, on) => {
+  const w = world(on, OK())
+  withStat(w, on)
+  const old = 'stream: proj\nsaved: 2026-10-20T10:00:00.000Z s0\nstatus: building\nprevious_session: none\ngoal: old goal\nstint: 3\n\nread_first:\ndeliverable: /w/x.md\ndecisions:\n- old choice — why\n'
+  w.files.set(NOTES, old)
+  w.files.set(JOURNAL, '### c01 2026-10-21T10:00:00.000Z s0\n<!-- ckpt decision: from journal -->\n\n')
+  await fresh($)
+  expect((await rejoin($, 'proj')).text).toBe('rejoin: loading stream "proj" as the first message.')
+  await w.clock.advance(1)
+  expect(w.submits[0]).toContain('goal: old goal')
+  await pit($, 'proj --save')
+  const notes = w.files.get(NOTES) ?? ''
+  expect(w.forkPrompts[0]).toContain('### c01')
+  expect(section(notes, 'decisions')).toContain('from journal (c01)')
+  expect(notes).toContain('journal_cursor: c01')
+  expect(parseNotes(notes).scalars.stint).toBe('3')
+})
+
+test('L5 flow: a journal trimmed by hand under the cursor is read again from 0', async ($, on) => {
+  const w = world(on, OK())
+  withStat(w, on)
+  w.files.set(NOTES, 'stream: proj\njournal_cursor: c40\n\ndecisions:\n- kept (c12)\n')
+  w.files.set(JOURNAL, '### c01 2026-10-21T10:00:00.000Z s0\n<!-- ckpt decision: after trim -->\n\n')
+  await fresh($)
+  await pit($, 'proj --save')
+  const notes = w.files.get(NOTES) ?? ''
+  expect(section(notes, 'decisions')).toEqual(['kept (c12)', 'after trim (c01)', 'notes by one fork — simpler'])
+  expect(notes).toContain('journal_cursor: c01')
+})
+
+test('L5 flow: checkpoint off reads no journal: fork-only notes, the cursor carried', async ($, on) => {
+  const w = world(on, OK())
+  withStat(w, on)
+  checkpointRow(on)
+  w.files.set(NOTES, 'stream: proj\njournal_cursor: c01\n')
+  w.files.set(JOURNAL, '### c01 t s\n<!-- ckpt decision: a -->\n\n### c02 t s\n<!-- ckpt decision: b -->\n\n')
+  await fresh($)
+  await setCheckpointRow($, 'off')
+  await pit($, 'proj --save')
+  const notes = w.files.get(NOTES) ?? ''
+  expect(w.forkPrompts[0]).not.toContain('### c02')
+  expect(section(notes, 'decisions')).toEqual(['notes by one fork — simpler'])
+  expect(notes).toContain('journal_cursor: c01')
+  await setCheckpointRow($, 'on')
+  await pit($, 'proj --save')
+  expect(section(w.files.get(NOTES) ?? '', 'decisions')).toContain('b (c02)')
+})
+
+// ---------- default stream: one per unnamed session ----------
+
+test('autoStreamOf: <root folder>-<4 chars of the session id>; no id = main; odd folders still give a valid stream', () => {
+  expect(autoStreamOf('/repos/stint', '1b5d6394-1945-47e7')).toBe('stint-1b5d')
+  expect(autoStreamOf('/repos/stint/', 'AB-CD-ef')).toBe('stint-abcd')
+  expect(autoStreamOf('/home/x/My Project!', 'cbc35fcc')).toBe('my-project-cbc3')
+  expect(autoStreamOf('/', 'cbc35fcc')).toBe('session-cbc3')
+  expect(autoStreamOf('/w/pit', 'cbc35fcc')).toBe('session-cbc3')
+  expect(autoStreamOf('/w/repo', '')).toBe('main')
+  const long = autoStreamOf(`/w/${'a'.repeat(80)}`, 'cbc35fcc')
+  expect(long.length).toBeLessThanOrEqual(50)
+  expect(parseArgs(long, 'pit')).toEqual({ stream: long })
+})
+
+test('default stream: an untitled session takes its own name as session title; a titled one is left alone', async ($, on) => {
+  world(on, OK())
+  expect(await fresh($)).toMatchObject({ sessionTitle: 'work-sess' })
+  const titled = await $.classic.SessionStart({ source: 'resume', session_title: 'Ship v2' })
+  expect(titled).not.toHaveProperty('sessionTitle')
+  expect((await pit($, '--save')).text).toBe('pit: saved .stint/ship-v2-notes.md (no clear)')
+})
+
+test('default stream: kept across /clear, so the journal, the pit and the re-injection stay on one stream', async ($, on) => {
+  const w = world(on, OK())
+  withStat(w, on)
+  await fresh($)
+  await answer($, TRAIL1)
+  await pit($, '')
+  await w.clock.advance(5)
+  await clear($)
+  expect(w.submits[0]).toContain('stream: work-sess')
+  await answer($, TRAIL2)
+  const j = w.files.get(`${CWD}/.stint/work-sess-journal.md`) ?? ''
+  expect(j).toContain('### c01 ')
+  expect(j).toContain('### c02 ')
+})
+
+test('default stream: /rename carries the journal over to the new name when the session saved no notes yet', async ($, on) => {
+  const w = world(on, OK())
+  withStat(w, on)
+  await fresh($)
+  await answer($, TRAIL1)
+  await title($, 'proj')
+  expect(w.files.get(JOURNAL)).toContain(TRAIL1)
+  await answer($, TRAIL2)
+  const j = w.files.get(JOURNAL) ?? ''
+  expect(j).toContain('### c01 ')
+  expect(j).toContain('### c02 ')
+  await pit($, '')
+  expect(section(w.files.get(NOTES) ?? '', 'decisions')).toContain('keep A (c01)')
+  expect(w.toasts.some(t => t.includes('stays under'))).toBe(false)
+})
+
+test('default stream: /rename after a save, or onto a stream with a journal, copies nothing and says where the old entries are', async ($, on) => {
+  const w = world(on, OK())
+  withStat(w, on)
+  await fresh($)
+  await answer($, TRAIL1)
+  await pit($, '--save')
+  await title($, 'proj')
+  expect(w.files.has(JOURNAL)).toBe(false)
+  expect(w.toasts.at(-1)).toBe('stint: this session now saves to stream "proj"; what was journaled before /rename stays under "work-sess" (/rejoin work-sess)')
+  await answer($, TRAIL2)
+  expect(w.files.get(JOURNAL)).toMatch(/^### c01 \S+ sess-1\n<!-- ckpt open: which stream\? -->/)
+})
+
+test('default stream: a second /rename, or a rename of an explicitly bound session, never copies a journal', async ($, on) => {
+  const w = world(on, OK())
+  withStat(w, on)
+  await fresh($)
+  await title($, 'proj')
+  await answer($, TRAIL1)
+  await title($, 'other')
+  expect(w.files.has(`${CWD}/.stint/other-journal.md`)).toBe(false)
+  await pit($, 'bound --save')
+  await answer($, TRAIL2)
+  await title($, 'third')
+  expect(w.files.has(`${CWD}/.stint/third-journal.md`)).toBe(false)
 })

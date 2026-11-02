@@ -1,7 +1,8 @@
 import type { EngineInterface, On } from 'claude-code'
 
 import { pitDone, pitStart, refresh as refreshDash, setLap } from './dash.ts'
-import { RULE_TEXT, captureCkpt, checkpointOn, claudeMdHasRule, journalPath, journalRule, withRule } from './checkpoint.ts'
+import { ROUTE, RULE_TEXT, captureCkpt, checkpointOn, claudeMdHasRule, journalPath, journalRule, parseJournal, parseTrailer, withRule } from './checkpoint.ts'
+import type { Entry } from './checkpoint.ts'
 import { debugOn, sidNow, startWatch, stopWatch, trace, writeReport } from './debug.ts'
 import { AUTOPIT_CEILING, AUTOPIT_MIN_TOKENS, getAutopitInfo, getIdleFire, setAutopitInfo, setIdleFire, setPitBoard, setPitLine, writeStatus } from './status.ts'
 import type { AutopitInfo } from './status.ts'
@@ -39,7 +40,7 @@ Write a message only when something changes. The rest of the time stay silent.
 Questions go to me, in this window.
 After my go, read the \`read_first\` files before acting.`
 
-export const FORK_PROMPT = `You are writing the notes of this work stream for yourself. After a /clear the notes file is the ONLY thing the fresh context receives. You designate every field yourself; code only assembles and caps the file.
+export const FORK_PROMPT = `You are writing the notes of this work stream for yourself. After a /clear the notes file is the ONLY thing the fresh context receives. Code assembles the file: you DESIGNATE, you never copy. Lines coming from checkpoint trailers are routed and copied verbatim by code, each ending with its id (cNN).
 First line, exactly one of:
 GATE: ok
 GATE: blocked - <one-line reason>
@@ -50,24 +51,33 @@ goal: <1 sentence, carried from PREVIOUS NOTES unless it changed>
 read_first:
 - <path — role>   (closed list, read only after the human's go, never before the go)
 read_if_needed:
-- <path or URL — when to read it>
+- <path or URL — when to read it>   (extras only)
 deliverable: <path where the written work lives>
 decisions:
-- <choice — why>   (the why is mandatory; do not reopen)
+- <choice — why>   (ONLY decisions no trailer covers; the why is mandatory; do not reopen)
 learnings:
-- <non-obvious fact — command or path that proves it>
+- <non-obvious fact — command or path that proves it>   (extras only)
 discarded:
-- <path or approach tried — why rejected>
+- <path or approach tried — why rejected>   (extras only)
 in_progress:
 - <half-done item — where it stands>
 next:
-- <action>   (2-4 actions)
+- <action>   (2-4 actions, extras only)
 unknowns:
 - <what is not known>   (never empty)
 stale:
 - <path — replaced by X; do not reload>
+retire_answered: <ids, e.g. c03, c07>
+retire_done: <ids>
+retire_learned: <ids>
+retire_reversed: <ids, e.g. c05>
+retire_superseded: <ids>
 Rules:
-- You own every field. Return the COMPLETE current content of every list: merge PREVIOUS NOTES with what this conversation added. Carry forward what is still true; drop what is done, answered, replaced or reversed (a reversed decision goes to discarded). Never restart from scratch.
+- Every list except read_if_needed, learnings, discarded, next and decisions is yours entirely, and for those five you give EXTRAS only: whatever the trailers below and the (cNN) lines of PREVIOUS NOTES do not already say.
+- Return the COMPLETE current content of every list you own: merge PREVIOUS NOTES with what this conversation added. Carry forward the still-valid lines that have no (cNN) suffix; drop what is done, answered, replaced or reversed (a reversed decision of yours goes to discarded). Never restart from scratch.
+- A line ending with (cNN) belongs to code: never output one, never reword one. To remove one, designate its id in a retire key.
+- Never restate an item a (cNN) line or an entry below already holds, even reworded and without the id: one item, one line. Wrong: with \`- pick a strict YAML 1.2 parser or a schema check (c01)\` in next, adding \`- choose between a YAML 1.2 parser and schema validation\`. Add a line only for what no (cNN) line says.
+- Retire keys take ids from PREVIOUS NOTES or from the entries below. retire_answered: open: / assumption: items now resolved. retire_done: next items now done. retire_learned: learnings now obsolete (a bug since fixed, a fact replaced by a later one). retire_reversed: decisions proved wrong and reversed. retire_superseded: decisions overtaken by a later decision without being wrong. Omit a retire key when it is empty.
 - Lines starting "agent in flight:" are written by code: never write one.
 - A pointer (absolute path, path:line, command) replaces any explanation. Do not run commands; write them.`
 
@@ -139,9 +149,18 @@ export function parseArgs(args: string, cmd: Cmd): ParsedArgs {
   return save ? { stream, save } : { stream }
 }
 
-// Explicit binding (a command argument) > session title (/rename) > the default stream.
-export function resolveStream(bound: string | null, title: string | null): string {
-  return bound ?? title ?? DEFAULT_STREAM
+// Explicit binding (a command argument) > session title (/rename) > this session's own name (autoStreamOf) > the default stream.
+export function resolveStream(bound: string | null, title: string | null, auto: string | null = null): string {
+  return bound ?? title ?? auto ?? DEFAULT_STREAM
+}
+
+// The stream of a session nobody named: <root folder>-<first 4 chars of the session id>. Two unnamed sessions started in one folder
+// never share a journal or notes. No session id = the default stream.
+export function autoStreamOf(root: string, sid: string): string {
+  const tag = sid.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 4)
+  if (tag === '') return DEFAULT_STREAM
+  const folder = (slugify(root.replace(/\/+$/, '').split('/').pop() ?? '') ?? 'session').slice(0, 45).replace(/-+$/, '') || 'session'
+  return `${folder}-${tag}`
 }
 
 // The wall is where auto-compaction fires; a fork started at or above WALL_CAP of it would fail there.
@@ -285,7 +304,8 @@ const shortReason = (reason: string) => {
 
 // ---------- notes format ----------
 
-export const SCALARS_HEADER = ['stream', 'saved', 'status', 'previous_session', 'goal']
+// journal / journal_cursor: the journal of the stream and the last entry the notes took in (absent in older notes = c00).
+export const SCALARS_HEADER = ['stream', 'saved', 'status', 'previous_session', 'goal', 'journal', 'journal_cursor']
 // Written after the header scalars when the caller gives a stint number: the stint the notes hand over to (absent in older notes = 1).
 export const STINT_KEY = 'stint'
 export const LISTS = ['read_first', 'read_if_needed', 'decisions', 'learnings', 'discarded', 'in_progress', 'next', 'unknowns', 'stale']
@@ -326,7 +346,8 @@ export function stintOf(notes: string | null): number {
   return n >= 1 ? n : 1
 }
 
-const FORK_SCALARS = ['status', 'goal', 'deliverable']
+export const RETIRE_KEYS = ['retire_answered', 'retire_done', 'retire_learned', 'retire_reversed', 'retire_superseded']
+const FORK_SCALARS = ['status', 'goal', 'deliverable', ...RETIRE_KEYS]
 export type ForkParse = { kind: 'ok'; body: string } | { kind: 'blocked'; reason: string }
 
 export function parseFork(text: string): ForkParse {
@@ -370,6 +391,39 @@ export function agentLinesOf(listed: AgentLike[]): string[] {
 
 const uniq = (lines: string[]) => [...new Set(lines)]
 
+// ---------- checkpoint entries in the notes ----------
+
+// A line ending with ` (cNN)` came from a journal entry: code owns it, the fork never writes one.
+const ID_END = /\s\(c(\d+)\)\s*$/
+export const idOf = (line: string): number | null => {
+  const m = line.match(ID_END)
+  return m ? Number(m[1]) : null
+}
+const stripId = (line: string) => line.replace(ID_END, '')
+// Dedupe key of a code-owned line: its text without the id, whitespace collapsed (a retried journal write can leave byte-identical entries).
+const dedupeKey = (line: string) => oneLine(stripId(line))
+
+// `journal_cursor: cNN` of a notes file; absent or malformed = 0.
+export function cursorOf(notes: string | null): number {
+  const raw = notes ? parseNotes(notes).scalars.journal_cursor : undefined
+  const m = (raw ?? '').match(/^c?(\d{1,6})$/)
+  return m ? Number(m[1]) : 0
+}
+
+// The journal entries a save takes in: those after the cursor of the previous notes. A cursor past the journal's last id (journal trimmed by hand) starts over at 0.
+// No journal text (none yet, unreadable, checkpoint off) = no entry, the cursor carried as it is.
+export function takeEntries(prev: string | null, journal: string | null): { entries: Entry[]; from: number } {
+  const from = cursorOf(prev)
+  if (journal === null) return { entries: [], from }
+  const all = parseJournal(journal)
+  const max = all.reduce((m, e) => Math.max(m, e.n), 0)
+  const start = from > max ? 0 : from
+  return { entries: all.filter(e => e.n > start), from: start }
+}
+
+// `c03, c07` (or `3 7`) -> {3, 7}.
+const idSet = (raw: string | undefined) => new Set((raw ?? '').match(/\d+/g)?.map(Number) ?? [])
+
 export type AssembleInput = {
   stream: string
   saved: string
@@ -380,25 +434,95 @@ export type AssembleInput = {
   stint?: number
   // In-flight agent lines (agentLines()), written by code; rendered first in in_progress and never cut.
   agents?: string[]
+  // Journal entries after the cursor (takeEntries), their clauses routed verbatim by code; none = fork-only notes.
+  entries?: Entry[]
+  // Cursor the entries were taken after (takeEntries().from); default: the cursor of the previous notes.
+  cursorFrom?: number
+  // Path written in the `journal:` header line; default: the previous one, else none.
+  journal?: string
 }
 export type Assembled =
-  | { kind: 'ok'; state: string; cut: string[]; degraded: boolean }
+  | { kind: 'ok'; state: string; cut: string[]; degraded: boolean; cursor: string }
   | { kind: 'blocked'; reason: string }
 
-// The fork designated every field; code merges nothing but the header and the agent lines, then enforces the cap.
+// Code-owned lines (cNN) = carried from the previous notes + the clauses of the new entries, routed by ROUTE, deduped, then retired as the fork designated.
+// Fork-owned lines = every line without an id. Then the header, the agent lines and the cap.
 export function assemble(input: AssembleInput): Assembled {
   const prev = input.prev ? parseNotes(input.prev) : null
   const fields = input.fork
+  const entries = input.entries ?? []
 
+  // 1. carried id'd lines + routed clauses, deduped per section on their text: the lowest id survives, a dropped duplicate's id points to it.
+  const alias = new Map<number, number>()
   const lists: Record<string, string[]> = {}
   for (const sec of LISTS) {
-    let own = uniq((fields.lists[sec] ?? []).map(oneLine).filter(l => l !== ''))
+    const routed: string[] = []
+    for (const entry of entries) {
+      for (const clause of parseTrailer(entry.trailer)) if (ROUTE[clause.type] === sec) routed.push(`${clause.text} (${entry.id})`)
+    }
+    const out: string[] = []
+    const at = new Map<string, number>()
+    for (const line of [...(prev?.lists[sec] ?? []).filter(l => idOf(l) !== null), ...routed]) {
+      const key = dedupeKey(line)
+      const id = idOf(line) as number
+      const i = at.get(key)
+      if (i === undefined) {
+        at.set(key, out.length)
+        out.push(line)
+        continue
+      }
+      const kept = idOf(out[i] as string) as number
+      if (id === kept) continue
+      if (id < kept) {
+        alias.set(kept, id)
+        out[i] = line
+      } else alias.set(id, kept)
+    }
+    lists[sec] = out
+  }
+
+  // 2. retire: answered open/assumption items, done next items and obsolete learnings vanish; reversed or superseded decisions move to discarded with their id.
+  const retired = (key: string) => {
+    const set = idSet(fields.scalars[key])
+    for (const [dup, kept] of alias) if (set.has(dup)) set.add(kept)
+    return set
+  }
+  const answered = retired('retire_answered')
+  const done = retired('retire_done')
+  const learned = retired('retire_learned')
+  const reversed = retired('retire_reversed')
+  const superseded = retired('retire_superseded')
+  const moved: string[] = []
+  for (const sec of LISTS) {
+    lists[sec] = (lists[sec] as string[]).filter(line => {
+      const id = idOf(line) as number
+      if ((sec === 'next' || sec === 'unknowns') && answered.has(id)) return false
+      if (sec === 'next' && done.has(id)) return false
+      if (sec === 'learnings' && learned.has(id)) return false
+      if (sec === 'decisions' && (reversed.has(id) || superseded.has(id))) {
+        moved.push(`${stripId(line)} — ${reversed.has(id) ? 'reversed' : 'superseded'} (c${pad(id)})`)
+        return false
+      }
+      return true
+    })
+  }
+
+  // 3. fork-owned lines: any line the fork ends with (cNN) is dropped, code owns those.
+  for (const sec of LISTS) {
+    let own = (fields.lists[sec] ?? []).map(oneLine).filter(l => l !== '' && idOf(l) === null)
     if (sec === 'decisions') own = own.map(l => (l.includes('—') ? l : `${l} — why missing`))
     if (sec === 'in_progress') own = own.filter(l => !l.startsWith(AGENT_LINE) && l !== AGENTS_UNKNOWN) // code writes those, never the fork
-    lists[sec] = own
+    lists[sec] = uniq([...(lists[sec] as string[]), ...own])
+  }
+  if (moved.length) {
+    const have = new Set((lists.discarded as string[]).map(dedupeKey))
+    lists.discarded = [...(lists.discarded as string[]), ...moved.filter(l => !have.has(dedupeKey(l)))]
   }
   if (lists.unknowns?.length === 0) lists.unknowns = ['nothing recorded — treat every fact as unverified']
 
+  // 4. header.
+  const from = input.cursorFrom ?? cursorOf(input.prev)
+  const cursor = `c${pad(Math.max(from, ...entries.map(e => e.n)))}`
   const prevWriter = (prev?.scalars.saved ?? '').split(/\s+/)[1]
   const previousSession = prevWriter && prevWriter !== input.sid ? prevWriter : prev?.scalars.previous_session || 'none'
   const scalars: Record<string, string> = {
@@ -407,6 +531,8 @@ export function assemble(input: AssembleInput): Assembled {
     status: oneLine(fields.scalars.status || prev?.scalars.status || 'unknown'),
     previous_session: previousSession,
     goal: oneLine(fields.scalars.goal || prev?.scalars.goal || 'unknown'),
+    journal: input.journal ?? prev?.scalars.journal ?? 'none',
+    journal_cursor: cursor,
     deliverable: oneLine(fields.scalars.deliverable || prev?.scalars.deliverable || 'none'),
   }
 
@@ -415,7 +541,9 @@ export function assemble(input: AssembleInput): Assembled {
   let degraded = false
   const render = () => {
     const header: Record<string, string | undefined> = { ...scalars, status: degraded ? `degraded (${scalars.status})` : scalars.status }
-    const head = [...SCALARS_HEADER.map(k => `${k}: ${header[k]}`), ...(input.stint !== undefined ? [`${STINT_KEY}: ${input.stint}`] : [])].join('\n')
+    // `stint:` right after goal (where 0.3.0 wrote it), then the journal lines.
+    const keys = SCALARS_HEADER.flatMap(k => (k === 'goal' && input.stint !== undefined ? [k, STINT_KEY] : [k]))
+    const head = keys.map(k => `${k}: ${k === STINT_KEY ? input.stint : header[k]}`).join('\n')
     const agents = input.agents ?? []
     const shown = (k: string) => {
       const list = lists[k] ?? []
@@ -425,8 +553,10 @@ export function assemble(input: AssembleInput): Assembled {
     return `${head}\n\n${body}\n`
   }
 
-  // Hard cap, enforced here whatever the fork wrote. Cut order: read_if_needed (compressed), stale, in_progress, discarded, learnings (each oldest first).
-  // Still over: what is left of read_if_needed, then next, unknowns, decisions. Never cut: header scalars, read_first, deliverable, the agent lines.
+  // Hard cap, enforced here whatever the fork wrote. First, silently: read_if_needed compressed (its id kept), then stale and in_progress, oldest first.
+  // Still over, with the overflow line on: discarded, learnings (oldest first), then the id'd lines left, lowest cNN first, then the un-id'd lines of
+  // read_if_needed, next, unknowns, decisions. Every dropped id is named on the overflow line (the journal keeps it).
+  // Never cut: header scalars, read_first, deliverable, the agent lines.
   const cut: string[] = []
   let text = render()
   const over = () => text.length > NOTES_MAX
@@ -435,32 +565,55 @@ export function assemble(input: AssembleInput): Assembled {
     text = render()
   }
   const dropped: Record<string, number> = {}
-  const drop = (sec: string) => {
-    ;(lists[sec] as string[]).shift()
+  const droppedIds = new Set<number>()
+  const overflow = () => {
+    const ids = [...droppedIds].sort((x, y) => x - y).map(n => `c${pad(n)}`)
+    return `overflow: cut to fit ${NOTES_MAX} chars: ${Object.entries(dropped).map(([s, n]) => `${s} -${n}`).join(', ') || 'nothing yet'}${ids.length ? `; journal ids dropped: ${ids.join(', ')} — grep the journal by id` : ''}`
+  }
+  const dropAt = (sec: string, i: number) => {
+    const [line] = (lists[sec] as string[]).splice(i, 1)
+    const id = idOf(line as string)
+    if (id !== null) droppedIds.add(id)
     dropped[sec] = (dropped[sec] ?? 0) + 1
+    if (overflowLine !== null) overflowLine = overflow()
     text = render()
   }
   if (over()) {
     const before = (lists.read_if_needed as string[]).join('\n')
-    lists.read_if_needed = (lists.read_if_needed as string[]).map(l => (l.length <= SHRINK_LINE ? l : `${l.slice(0, SHRINK_LINE - 1)}…`))
+    lists.read_if_needed = (lists.read_if_needed as string[]).map(l => {
+      if (l.length <= SHRINK_LINE) return l
+      const id = idOf(l)
+      const head = `${stripId(l).slice(0, SHRINK_LINE - 1)}…`
+      return id === null ? head : `${head} (c${pad(id)})`
+    })
     text = render()
     if ((lists.read_if_needed as string[]).join('\n') !== before) cut.push('read_if_needed compressed')
   }
-  for (const sec of ['stale', 'in_progress', 'discarded', 'learnings']) {
-    while (over() && (lists[sec] as string[]).length > 0) drop(sec)
+  for (const sec of ['stale', 'in_progress']) {
+    while (over() && (lists[sec] as string[]).length > 0) dropAt(sec, 0)
   }
   if (over()) {
-    // The cut is announced in stale, inside the measured text.
-    const overflow = () =>
-      `overflow: cut to fit ${NOTES_MAX} chars: ${Object.entries(dropped).map(([s, n]) => `${s} -${n}`).join(', ') || 'nothing yet'}`
     overflowLine = overflow()
     text = render()
-    for (const sec of ['read_if_needed', 'next', 'unknowns', 'decisions']) {
-      while (over() && (lists[sec] as string[]).length > 0) {
-        drop(sec)
-        overflowLine = overflow()
-        text = render()
+    for (const sec of ['discarded', 'learnings']) {
+      while (over() && (lists[sec] as string[]).length > 0) dropAt(sec, 0)
+    }
+    // The oldest id'd line across the body sections left (never read_first).
+    while (over()) {
+      let best: { sec: string; i: number; n: number } | null = null
+      for (const sec of LISTS) {
+        if (sec === 'read_first') continue
+        const list = lists[sec] as string[]
+        for (let i = 0; i < list.length; i++) {
+          const n = idOf(list[i] as string)
+          if (n !== null && (best === null || n < best.n)) best = { sec, i, n }
+        }
       }
+      if (best === null) break
+      dropAt(best.sec, best.i)
+    }
+    for (const sec of ['read_if_needed', 'next', 'unknowns', 'decisions']) {
+      while (over() && (lists[sec] as string[]).length > 0) dropAt(sec, 0)
     }
   }
   for (const [sec, n] of Object.entries(dropped)) cut.push(`${sec} -${n}`)
@@ -470,14 +623,16 @@ export function assemble(input: AssembleInput): Assembled {
       reason: `notes ${text.length} chars > ${NOTES_MAX} after cutting ${cut.join(', ') || 'nothing cuttable'}; the header, read_first and the agent lines alone exceed the cap: shorten read_first by hand. Nothing written.`,
     }
   }
-  return { kind: 'ok', state: text, cut, degraded: degraded }
+  return { kind: 'ok', state: text, cut, degraded, cursor }
 }
 
-export function forkPrompt(prev: string | null): string {
+// The entries go to the fork with their ids, as journaled; the fork never gets the journal path to read.
+export function forkPrompt(prev: string | null, entries: Entry[] = []): string {
   const n = (v: number) => v.toLocaleString('en-US')
   const room = NOTES_MAX - (prev?.length ?? 0)
-  const budget = `SIZE: the notes file may not exceed ${n(NOTES_MAX)} characters; past it code cuts, in this order, read_if_needed, stale, in_progress, discarded, learnings, then the rest. PREVIOUS NOTES are ${n(prev?.length ?? 0)} characters: ${room >= 0 ? `${n(room)} left` : `${n(-room)} over`} for what this conversation adds.${room < 1_500 ? ' Room is tight: drop obsolete lines and shorten the rest.' : ''}`
-  return `${FORK_PROMPT}\n\n${budget}\n\nPREVIOUS NOTES:\n${prev ?? '(none)'}`
+  const budget = `SIZE: the notes file may not exceed ${n(NOTES_MAX)} characters; past it code cuts, in this order, read_if_needed, stale, in_progress, discarded, learnings, then the rest. PREVIOUS NOTES are ${n(prev?.length ?? 0)} characters: ${room >= 0 ? `${n(room)} left` : `${n(-room)} over`} for what this conversation adds.${room < 1_500 ? ' Room is tight: designate retire ids first, drop obsolete lines and shorten the rest.' : ''}`
+  const journal = entries.length ? entries.map(e => `### ${e.id}\n${e.trailer}`).join('\n\n') : '(none)'
+  return `${FORK_PROMPT}\n\n${budget}\n\nPREVIOUS NOTES:\n${prev ?? '(none)'}\n\nJOURNAL ENTRIES TO ROUTE (code copies their clauses; you may retire their ids):\n${journal}`
 }
 
 // Auto-pit only: the user did not ask for this, so the first answer is the line below, a short summary, then silence.
@@ -516,6 +671,8 @@ let saving = false
 // Stream binding. Same session across /clear, so it survives /clear; reset on startup/resume/fork.
 let boundArg: string | null = null
 let titleStream: string | null = null
+// This session's own stream name (autoStreamOf), set at session start; kept across /clear, recomputed on startup/resume/fork.
+let autoStream: string | null = null
 // The pit's message: running flow, then last sticky outcome, then the session-start hint. `status` goes to the status line
 // (only where the band was never raised), `board` to the band's board slot; `bad` draws it red. An empty status writes nothing.
 type Line = { status: string; board: string; bad?: boolean }
@@ -524,7 +681,11 @@ let ticker: { cancel: () => void } | null = null
 let outcome: Line | undefined
 let hint: Line | undefined
 
-const current = () => resolveStream(boundArg, titleStream)
+const current = () => resolveStream(boundArg, titleStream, autoStream)
+
+async function setAutoStream($: EngineInterface) {
+  autoStream = autoStreamOf(await rootNow($), await $.session.id().catch(() => ''))
+}
 
 // Auto-pit state. The mode is read from the /config row on first use and follows config.set; the rest is rebuilt by the next turn.complete.
 let autopitMode: string | null = null
@@ -668,12 +829,15 @@ async function buildNotes($: EngineInterface, cwd: string, stream: string, save 
     const path = notesPath(cwd, stream)
     const prev = await readOptional($, path)
     const agents = await agentLines($)
+    // The journal entries after the cursor of the previous notes (a --save advances the cursor too). Checkpoint off or an unreadable journal = none: fork-only notes.
+    const journal = journalPath(cwd, stream)
+    const taken = takeEntries(prev, checkpointOn() ? await readOptional($, journal).catch(() => null) : null)
     // One fork per save: an over-cap answer is cut by assemble(), never re-asked.
-    const asked = await askFork($, forkPrompt(prev))
+    const asked = await askFork($, forkPrompt(prev, taken.entries))
     if (asked.kind === 'blocked') return asked
     const stint = stintOf(prev) + (save ? 0 : 1)
     const nowMs = await $.clock.now()
-    const result = assemble({ stream, saved: new Date(nowMs).toISOString(), sid, prev, fork: asked.fork, agents, stint })
+    const result = assemble({ stream, saved: new Date(nowMs).toISOString(), sid, prev, fork: asked.fork, agents, stint, entries: taken.entries, cursorFrom: taken.from, journal })
     if (result.kind === 'blocked') return result
     // The previous file is copied aside before it is overwritten; if the copy fails nothing is overwritten.
     if (prev !== null) {
@@ -1153,10 +1317,36 @@ function noteCaught($: EngineInterface, hook: string, error: { kind: string; mes
   }
 }
 
-async function noteTitle(title: string | undefined) {
+async function noteTitle($: EngineInterface, title: string | undefined) {
   if (title === undefined) return
   const slug = slugify(title)
-  if (slug !== null) titleStream = slug
+  if (slug === null || slug === titleStream) return
+  // A /rename while the session ran under its own name: the journal follows the new name.
+  const from = boundArg === null && (titleStream === null || titleStream === autoStream) ? autoStream : null
+  titleStream = slug
+  if (from !== null && from !== slug) await followRename($, from, slug)
+}
+
+// $.fs cannot delete or move, so the journal is copied: the old file stays, unlisted (only notes files are streams).
+// Not copied when the old name already has notes (both stay, the user is told) or the new name already has a journal (the stream already exists).
+async function followRename($: EngineInterface, from: string, to: string) {
+  try {
+    const root = await rootNow($)
+    const src = journalPath(root, from)
+    if (!(await $.fs.exists(src))) return
+    const dst = journalPath(root, to)
+    if ((await $.fs.exists(notesPath(root, from))) || (await $.fs.exists(dst))) {
+      $.ui.toast(`stint: this session now saves to stream "${to}"; what was journaled before /rename stays under "${from}" (/rejoin ${from})`, { timeoutMs: ERROR_TOAST_MS })
+      return
+    }
+    await $.fs.write(dst, await $.fs.read(src))
+    if (journaled.has(from)) {
+      journaled.delete(from)
+      journaled.set(to, dst)
+    }
+  } catch (err) {
+    $.ui.log(`stint: journal not carried over to "${to}": ${String(err)}`, { to: 'debug' })
+  }
 }
 
 // Journals the trailers of a main-loop answer under the session root; a failed write shows one red board line for a few seconds. Never throws.
@@ -1273,7 +1463,9 @@ export function registerPit(on: On) {
       hint = undefined
       paint($)
     }
-    await noteTitle(e.session_title)
+    // A mod loaded mid-session never saw the session start.
+    if (autoStream === null) await setAutoStream($)
+    await noteTitle($, e.session_title)
     return next(e)
   }).catch(($, e, next) => {
     noteCaught($, 'classic.UserPromptSubmit', next.error)
@@ -1296,6 +1488,7 @@ export function registerPit(on: On) {
       if (e.source === 'startup' || e.source === 'resume' || e.source === 'fork') {
         boundArg = null
         titleStream = null
+        autoStream = null
         pending = null
         saving = false
         stopProgress()
@@ -1306,17 +1499,25 @@ export function registerPit(on: On) {
         claudeHasRule = false
         stopWatch()
       }
-      await noteTitle(e.session_title)
+      await noteTitle($, e.session_title)
+      if (autoStream === null) await setAutoStream($)
       if (boundArg === null) {
         const streams = await listStreams($)
         if (streams.length > 0) hint = { status: hintText(streams), board: hintBoard(streams) }
       }
       paint($)
       if (e.source === 'startup' || e.source === 'resume') await idleCompactionNotice($)
-      return next(e)
+      const result = await next(e)
+      // An untitled session takes its stream name as title: visible in /resume, and a resumed session finds its stream again through it.
+      // /rename replaces it like any title.
+      if (e.session_title === undefined && titleStream === null && boundArg === null && autoStream !== null && result.sessionTitle === undefined) {
+        return { ...result, sessionTitle: autoStream }
+      }
+      return result
     }
 
-    await noteTitle(e.session_title)
+    if (autoStream === null) await setAutoStream($)
+    await noteTitle($, e.session_title)
     const found = await armedPending($)
     await reset($)
     if ('miss' in found) {

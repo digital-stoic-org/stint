@@ -61,7 +61,7 @@ export const entryText = (id: string, iso: string, sid: string, trailer: string)
 export const journalPath = (root: string, stream: string) => `${root.replace(/\/+$/, '')}/.stint/${stream}-journal.md`
 
 export function journalRule(path: string): string {
-  return `Journal ${path}: never read it whole; to see an entry, grep by id: grep -A8 '^### cNN' ${path}`
+  return `Journal ${path}: never read it whole; to see an entry, grep by id: grep -A8 '^### cNN ' ${path} (the space after the id keeps c07 from matching c070)`
 }
 
 // Every <!-- ckpt ... --> comment of a final answer, in order, trimmed.

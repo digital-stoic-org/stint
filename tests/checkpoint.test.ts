@@ -94,7 +94,8 @@ test('journalRule: names the path and the grep-by-id way, never read whole', () 
   const r = journalRule('/r/.stint/main-journal.md')
   expect(r).toContain('/r/.stint/main-journal.md')
   expect(r).toContain('never read it whole')
-  expect(r).toContain("grep -A8 '^### cNN'")
+  // the space after the id: c07 must not match c070-c079
+  expect(r).toContain("grep -A8 '^### cNN '")
 })
 
 // ---------- trailersOf ----------
