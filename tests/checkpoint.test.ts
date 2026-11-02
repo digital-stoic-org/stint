@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { CLAUSES, RULE_TEXT, ROUTE, entryText, hideTrailer, journalPath, journalRule, maxId, pad, parseJournal, parseTrailer, splitTrailer, trailersOf } from '../hooks/checkpoint.ts'
+import { CLAUSES, RULE_TEXT, ROUTE, checkpointOn, entryText, hideTrailer, journalPath, journalRule, maxId, pad, parseJournal, parseTrailer, setCheckpoint, splitTrailer, trailersOf } from '../hooks/checkpoint.ts'
 
 const TRAILER = '<!-- ckpt decision: keep A · reasoning: B follows -->'
 
@@ -171,4 +171,19 @@ test('RULE_TEXT: tells the model how to separate clauses (a clause glued after a
   expect(RULE_TEXT).toMatch(/separated by `\s*·\s*` or a new line/)
   expect(parseTrailer('<!-- ckpt decision: a rejected: b -->').map(c => c.type)).toEqual(['decision'])
   expect(parseTrailer('<!-- ckpt decision: a · rejected: b -->').map(c => c.type)).toEqual(['decision', 'rejected'])
+})
+
+// ---------- setting (L6) ----------
+
+test('setCheckpoint: only the value off turns it off, anything else reads as the default (on)', () => {
+  setCheckpoint('off')
+  expect(checkpointOn()).toBe(false)
+  setCheckpoint('on')
+  expect(checkpointOn()).toBe(true)
+  setCheckpoint('off')
+  setCheckpoint(undefined)
+  expect(checkpointOn()).toBe(true)
+  setCheckpoint('off')
+  setCheckpoint('banana')
+  expect(checkpointOn()).toBe(true)
 })

@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
+import { CHECKPOINT_KEY } from '../hooks/checkpoint.ts'
 
 const TRAILER = '<!-- ckpt decision: use code · reasoning: because -->'
 
@@ -101,6 +102,37 @@ test('ui.render AssistantMessage: a body over 10,000 chars falls back to the tex
 test('ui.render AssistantMessage: a trailer alone (empty body) draws only the marker', async ($, on) => {
   drawMessages(on)
   const ui = await mountMessage($, TRAILER, 'solo')
+  expect(await found(ui, COLLAPSED)).toBe(true)
+  expect(await ui.findAll({ text: /<!-- ckpt/ })).toHaveLength(0)
+  await ui.unmount()
+})
+
+// ---------- setting `checkpoint` (L6) ----------
+
+const checkpointRow = (on: On) => on('config.set', { key: CHECKPOINT_KEY }, (_$, e) => ({ value: e.value }))
+const setCheckpointRow = ($: Engine, value: string) =>
+  $.config.set({ key: CHECKPOINT_KEY, value, previous: 'on', provider: { plugin: 'stint', tier: 'plugin' }, origin: { kind: 'composer' } } as never)
+
+test('ui.render AssistantMessage: checkpoint off -> the reply is drawn as it is, trailer in the text, no marker, no button', async ($, on) => {
+  drawMessages(on)
+  checkpointRow(on)
+  await setCheckpointRow($, 'off')
+  const ui = await mountMessage($, REPLY)
+  expect(await found(ui, /<!-- ckpt decision: use code/)).toBe(true)
+  expect(await found(ui, COLLAPSED)).toBe(false)
+  expect(await ui.findAll({ type: 'Button' })).toHaveLength(0)
+  await ui.unmount()
+})
+
+test('ui.render AssistantMessage: checkpoint off hides nothing of a streaming trailer either, and back on the marker returns', async ($, on) => {
+  drawMessages(on)
+  checkpointRow(on)
+  await setCheckpointRow($, 'off')
+  const streaming = await mountMessage($, 'Working.\n\n<!-- ckpt decision: use co', 'ms')
+  expect(await found(streaming, /<!-- ckpt decision: use co/)).toBe(true)
+  await streaming.unmount()
+  await setCheckpointRow($, 'on')
+  const ui = await mountMessage($, REPLY, 'mo')
   expect(await found(ui, COLLAPSED)).toBe(true)
   expect(await ui.findAll({ text: /<!-- ckpt/ })).toHaveLength(0)
   await ui.unmount()

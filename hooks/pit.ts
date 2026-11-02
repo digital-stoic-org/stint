@@ -1,7 +1,7 @@
 import type { EngineInterface, On } from 'claude-code'
 
 import { pitDone, pitStart, refresh as refreshDash, setLap } from './dash.ts'
-import { RULE_TEXT, captureCkpt, claudeMdHasRule, journalPath, journalRule, withRule } from './checkpoint.ts'
+import { RULE_TEXT, captureCkpt, checkpointOn, claudeMdHasRule, journalPath, journalRule, withRule } from './checkpoint.ts'
 import { debugOn, sidNow, startWatch, stopWatch, trace, writeReport } from './debug.ts'
 import { AUTOPIT_CEILING, AUTOPIT_MIN_TOKENS, getAutopitInfo, getIdleFire, setAutopitInfo, setIdleFire, setPitBoard, setPitLine, writeStatus } from './status.ts'
 import type { AutopitInfo } from './status.ts'
@@ -790,6 +790,7 @@ const journaled = new Map<string, string>()
 
 // What follows the notes: how to read the journal, and the trailer rule unless the project's instructions already hold it.
 const ckptTail = (stream: string): string => {
+  if (!checkpointOn()) return ''
   const path = journaled.get(stream)
   if (path === undefined) return ''
   return claudeHasRule ? journalRule(path) : `${RULE_TEXT}\n\n${journalRule(path)}`
@@ -1160,6 +1161,7 @@ async function noteTitle(title: string | undefined) {
 
 // Journals the trailers of a main-loop answer under the session root; a failed write shows one red board line for a few seconds. Never throws.
 async function journalCkpt($: EngineInterface, answer: string) {
+  if (!checkpointOn()) return
   try {
     const stream = current()
     const root = await rootNow($)
@@ -1226,6 +1228,7 @@ export function registerPit(on: On) {
   // unless the project's own instructions already hold it.
   on('prompt.context', async ($, e, next) => {
     const result = await next(e)
+    if (!checkpointOn()) return result
     try {
       claudeHasRule = claudeMdHasRule(result.blocks)
       return { ...result, blocks: withRule(result.blocks, journalPath(await rootNow($), current())) }

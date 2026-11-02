@@ -1,8 +1,8 @@
 import type { On } from 'claude-code'
 
-import { TRAILER_OPEN, splitTrailer, hideTrailer } from './checkpoint.ts'
+import { TRAILER_OPEN, checkpointOn, splitTrailer, hideTrailer } from './checkpoint.ts'
 
-// Checkpoint trailers on screen. Display only: the stored message and the journal keep the raw trailer, ctrl+o shows it.
+// Checkpoint trailers on screen. Display only: the stored message and the journal keep the raw trailer; the raw text shows on a press in fullscreen. Setting `checkpoint` off: untouched.
 // <Markdown> refuses more than this many characters; a longer body is rewritten as text instead.
 const MARKDOWN_MAX = 10_000
 // Message ids (e.requestId) whose trailer is expanded. Module scope: a press flips it and redraws; lost on mod reload (all collapsed again).
@@ -16,7 +16,7 @@ export function registerCheckpointView(on: On) {
   on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
     try {
       const text = e.props.text
-      if (typeof text !== 'string' || !text.includes(TRAILER_OPEN)) return next(e)
+      if (!checkpointOn() || typeof text !== 'string' || !text.includes(TRAILER_OPEN)) return next(e)
       const { body, trailers, kinds, unclosed } = splitTrailer(text)
       if (unclosed) return next({ ...e, props: { ...e.props, text: hideTrailer(text) } })
       if (trailers.length === 0) return next(e)

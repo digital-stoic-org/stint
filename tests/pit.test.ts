@@ -43,7 +43,7 @@ import {
   slugify,
   streamsFromNames,
 } from '../hooks/pit.ts'
-import { RULE_BLOCK, RULE_TEXT, journalRule } from '../hooks/checkpoint.ts'
+import { CHECKPOINT_KEY, RULE_BLOCK, RULE_TEXT, journalRule } from '../hooks/checkpoint.ts'
 
 // ---------- pure functions ----------
 
@@ -1960,4 +1960,54 @@ test('notes re-injection: a stream with no journal entry is injected exactly as 
   await answer($, 'no trailer here')
   await pitAndClear($, w)
   expect(w.submits).toEqual([injectText(w.files.get(NOTES) ?? '')])
+})
+
+// ---------- setting `checkpoint` off (L6) ----------
+
+const checkpointRow = (on: On) => on('config.set', { key: CHECKPOINT_KEY }, (_$, e) => ({ value: e.value }))
+const setCheckpointRow = ($: Engine, value: string) =>
+  $.config.set({ key: CHECKPOINT_KEY, value, previous: 'on', provider: { plugin: 'stint', tier: 'plugin' }, origin: { kind: 'composer' } } as never)
+
+test('checkpoint off: an answer with a trailer writes no journal, and on again it writes', async ($, on) => {
+  const w = world(on, OK())
+  withStat(w, on)
+  checkpointRow(on)
+  await fresh($)
+  await title($, 'proj')
+  await setCheckpointRow($, 'off')
+  await answer($, `Done.\n${TRAIL1}`)
+  expect(w.files.has(JOURNAL)).toBe(false)
+  expect(w.statuses.some(s => (s ?? '').includes('checkpoint not journaled'))).toBe(false)
+  await setCheckpointRow($, 'on')
+  await answer($, `Done.\n${TRAIL1}`)
+  expect(w.files.get(JOURNAL)).toContain('### c01 ')
+})
+
+test('checkpoint off: prompt.context passes the engine\'s blocks through, no stintCheckpoint block', async ($, on) => {
+  world(on, OK())
+  baseContext(on)
+  checkpointRow(on)
+  await fresh($)
+  await setCheckpointRow($, 'off')
+  const r = await ctx($, 'Be brief.')
+  expect(r.blocks.map(b => b.name)).toEqual(['claudeMd', 'userEmail', 'currentDate'])
+  await setCheckpointRow($, 'on')
+  const r2 = await ctx($, 'Be brief.')
+  expect(r2.blocks.map(b => b.name)).toEqual(['claudeMd', 'userEmail', 'currentDate', RULE_BLOCK])
+})
+
+test('checkpoint off: the notes of a stream journaled earlier get no rule after them', async ($, on) => {
+  const w = world(on, OK())
+  withStat(w, on)
+  baseContext(on)
+  checkpointRow(on)
+  await fresh($)
+  await title($, 'proj')
+  await ctx($, 'Be brief.')
+  await answer($, TRAIL1)
+  await setCheckpointRow($, 'off')
+  await pitAndClear($, w)
+  const sent = w.submits[0] ?? ''
+  expect(sent).not.toContain(RULE_TEXT)
+  expect(sent).not.toContain(journalRule(JOURNAL))
 })

@@ -1,6 +1,6 @@
 {
   "name": "stint",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "Run your agent in stints. Pit before the redline.",
   "author": {
     "name": "dstoic",
@@ -24,6 +24,16 @@
       "type": "string",
       "title": "stint · Auto-pit",
       "description": "Pit by itself, in two cases. Idle trigger: the session sits idle for 50 min (before the 1 h prompt cache expires) with 80k tokens or more of context. Ceiling trigger: right after a turn, when the context is at 80% of the window or more (or 90% of the point where the host compacts on its own, if that comes first). Both skip when a draft is in the prompt box or an agent is busy. The fresh session opens with one line (when, why, how big, where the notes are), a short summary, then waits for you. on: both triggers. off: never.",
+      "default": "on",
+      "options": [
+        "on",
+        "off"
+      ]
+    },
+    "checkpoint": {
+      "type": "string",
+      "title": "stint · Checkpoint",
+      "description": "Checkpoint trailers. stint teaches the model to end a turn that settles a decision with one <!-- ckpt ... --> comment, writes each one to .stint/<stream>-journal.md and hides it on screen behind a marker (pressable in fullscreen). on: all of it. off: none of it: no rule sent to the model, no journal, no hiding. The rule already sent stays in the current conversation until /clear or /compact.",
       "default": "on",
       "options": [
         "on",

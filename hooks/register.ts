@@ -1,6 +1,7 @@
 import type { Register } from 'claude-code'
 
 import { registerBand } from './band.ts'
+import { registerCheckpointSetting } from './checkpoint.ts'
 import { registerCheckpointView } from './checkpoint-view.tsx'
 import { registerDash } from './dash.ts'
 import { registerDebug } from './debug.ts'
@@ -11,5 +12,6 @@ export const register: Register = (on, options) => {
   registerDash(on, options)
   registerBand(on)
   registerDebug(on, options)
+  registerCheckpointSetting(on, options)
   registerCheckpointView(on)
 }

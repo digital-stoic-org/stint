@@ -2,7 +2,7 @@
 // top-level function declarations (the hooks compiler refuses `$` through an arrow). Ported from stoa hooks/pack.tsx.
 // A trailer is one HTML comment the model ends a turn with: `<!-- ckpt decision: ... · learning: ... -->`.
 
-import type { EngineInterface } from 'claude-code'
+import type { EngineInterface, On, PluginOptions } from 'claude-code'
 
 export type Clause = 'decision' | 'reasoning' | 'learning' | 'pivot' | 'rejected' | 'constraint' | 'assumption' | 'open' | 'definition' | 'refs'
 export type Section = 'read_first' | 'read_if_needed' | 'decisions' | 'learnings' | 'discarded' | 'in_progress' | 'next' | 'unknowns' | 'stale'
@@ -115,6 +115,33 @@ Inside, use any of these clauses, omit the empty ones, one clause of about 20 wo
 
 Keep the \`${TRAILER_OPEN}\` opener exactly as written: tools find trailers by it.`
 
+
+// ---------- setting (userConfig `checkpoint`) ----------
+
+// `checkpoint` (on | off, default on) is one /config choice row. Off = no capture, no journal write, no hide, no rule block, no rule after the notes.
+// Read from the options at load, then kept by the config.set hook; an unknown value reads as the default.
+export const CHECKPOINT_KEY = 'stint.checkpoint'
+let enabled = true
+export const checkpointOn = () => enabled
+export function setCheckpoint(value: unknown) {
+  enabled = value !== 'off'
+}
+
+export function registerCheckpointSetting(on: On, userOptions: PluginOptions) {
+  setCheckpoint(userOptions.checkpoint)
+  // Applied at once: the messages already on screen are redrawn (trailer shown or hidden). The rule block already sent stays until /clear or /compact.
+  on('config.set', { key: CHECKPOINT_KEY }, async ($, e, next) => {
+    const result = await next(e)
+    if ('deny' in result && result.deny !== undefined) return result
+    setCheckpoint(e.value)
+    try {
+      $.ui.invalidate('ui.render')
+    } catch {
+      // the redraw is cosmetic
+    }
+    return result
+  }).catch(($, e, next) => next(e))
+}
 
 // ---------- rule delivery (prompt.context) ----------
 

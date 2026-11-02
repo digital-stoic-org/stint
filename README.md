@@ -82,6 +82,22 @@ Off by default. Turn it on in `/config` (row `stint · Debug`, `off|on`). Once o
 
 After an armed `/pit`, if the injected prompt does not reach a turn within 10 seconds of the fresh session, or the pending notes were saved but not found, stint writes `<pit folder>/.stint/debug-<time>.md`, raises a red line on the board (`notes not loaded: /rejoin <stream> - trace saved`) and a toast with the path. `/pit --trace` writes the buffer on demand and never runs a pit. With debug off nothing is written and no timer runs.
 
+## Checkpoints
+
+On by default. stint teaches the model to end a turn that settles a decision, a learning, a rejected path, a change of frame or an open fork with one HTML comment, the trailer: `<!-- ckpt decision: ... · learning: ... -->`. The rule reaches the model as one context block (`stintCheckpoint`) at the start of each conversation, and again after `/clear` and `/compact`. It is left out when your own instructions (`CLAUDE.md`) already hold the opener `<!-- ckpt`. The clauses are `decision`, `reasoning`, `learning`, `pivot`, `rejected`, `constraint`, `assumption`, `open`, `definition`, `refs`.
+
+What stint does with a trailer:
+
+- **Journal.** Each trailer of a final answer is written, raw, to `<project root>/.stint/<stream>-journal.md` (same root and stream as the notes; before any `/rename` the stream is `main`, so a late `/rename` splits the journal). One entry per trailer: a `### cNN <time> <session>` line, then the comment. Entries are only added; to read one, grep its id (`grep -A8 '^### c07' <journal>`), never read the file whole. A failed write shows `checkpoint not journaled: write failed` on the board for a few seconds and the turn goes on.
+- **Screen.** The trailer is hidden in the reply. A marker stands in its place, `▸ ckpt: decision, learning`, naming the clauses it holds. In fullscreen a press on the marker shows the raw trailer and a second press hides it. Outside fullscreen only the marker is drawn and the press does nothing; the raw text is then in the journal. The stored message is not changed.
+
+Option (`/config`, row `stint · Checkpoint`, or `pluginConfigs.stint.options.checkpoint`), applied as soon as it changes:
+
+| `checkpoint` | does |
+|---|---|
+| `on` (default) | The rule, the journal and the marker. |
+| `off` | None of them: no rule sent, no journal write, nothing hidden. A trailer the model still writes (from your own instructions) shows as plain text. The rule already sent stays in the current conversation until `/clear` or `/compact`. |
+
 ## Notes file
 
 `<project root>/.stint/<stream>-notes.md` (the folder the session started in, not the shell's current folder; `/clear` and `/rejoin` use the same root). A saved note that /clear cannot re-inject shows `notes not loaded (<reason>): /rejoin <stream>` on the board. At most 8,000 characters, written by one model fork that sees the previous notes of the stream and merges them. Header: `stream`, `saved`, `status`, `previous_session`, `goal`, `stint`. `stint` is the number of the stint the notes hand over to: each successful `/pit` writes the previous value plus one, and a file without the field counts as 1. Body lists: `read_first`, `read_if_needed`, `deliverable`, `decisions`, `learnings`, `discarded`, `in_progress`, `next`, `unknowns`, `stale`. Over the cap, code marks the status `degraded`, shortens long `read_if_needed` lines, then drops items oldest first from `stale`, `in_progress`, `discarded`, `learnings`. Still over, it drops from `read_if_needed`, `next`, `unknowns`, `decisions` and names the cut in `stale`. The header, `read_first`, `deliverable` and the running agents are never cut; if they alone exceed the cap, nothing is written and the pit is refused. Agents still running are listed in `in_progress` by code.
