@@ -3,7 +3,7 @@ import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Board } from '../types'
 import { BASE_WINDOW, CACHE_TAIL_BYTES, CACHE_WARNING, CACHE_WARNING_ASCII, DASH_MODES, FLASH_MS, HARD_MESSAGE, LINE_MAX, PIT_DONE_TOAST, PIT_WAIT_MS, TOAST_MS, bar, buildRuns, cacheRun, canToast, ceilingMessage, clockText, cols, fit, flashing, fuelOf, idleText, modeOf, pickBoard, pitDoneText, renderLine, thresholdsOf, toastText, windowTag, zoneOf } from '../hooks/dash.ts'
-import { assemble, parseFork, parseForkBody, stintOf } from '../hooks/pit.ts'
+import { PHASE_HINT, assemble, parseFork, parseForkBody, phaseHintText, stintOf } from '../hooks/pit.ts'
 
 // ---------- pure functions ----------
 
@@ -60,6 +60,15 @@ test('fuelOf: the tighter plan window, as what is left; none when the host gives
   expect(fuelOf([{ kind: 'five_hour', percentUsed: 10 }, { kind: 'spend_limit', percentUsed: 90 }])).toBe(90)
   expect(fuelOf([{ kind: 'spend_limit', percentUsed: 90 }])).toBe(10)
   expect(fuelOf([{ kind: 'spend_limit', percentUsed: 130 }])).toBe(0)
+})
+
+test('phase hint (pit line): outranks the hard and red zone messages, drawn neutral, the red zone text carried by the hint itself', () => {
+  const hint = { text: phaseHintText(150_000, 200_000, 80) }
+  expect(pickBoard(undefined, 0, 2, { text: PHASE_HINT })).toEqual({ text: PHASE_HINT, rank: 'pit', bad: false })
+  expect(pickBoard(undefined, 0, 3, hint, { ceilingPct: 80 })).toEqual({ text: `${PHASE_HINT} · auto at 80%`, rank: 'pit', bad: false })
+  const reading = { percent: 75, tokens: 150_000, window: 200_000, rateLimits: [] }
+  const last = buildRuns({ reading, lap: 1, message: pickBoard(undefined, 0, 3, hint, { ceilingPct: 80 }) }, { emoji: true }, LINE_MAX).at(-1)
+  expect(last).toEqual({ text: `${PHASE_HINT} · auto at 80%` })
 })
 
 test('pickBoard: alert > redline > warn > info; the hard zone speaks as a warn, the red zone as a redline; an expired message is gone', () => {

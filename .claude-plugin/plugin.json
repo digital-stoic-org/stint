@@ -1,6 +1,6 @@
 {
   "name": "stint",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "Run your agent in stints. Pit before the redline.",
   "author": {
     "name": "dstoic",

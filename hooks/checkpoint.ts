@@ -4,13 +4,14 @@
 
 import type { EngineInterface, On, PluginOptions } from 'claude-code'
 
-export type Clause = 'decision' | 'reasoning' | 'learning' | 'pivot' | 'rejected' | 'constraint' | 'assumption' | 'open' | 'definition' | 'refs'
+export type Clause = 'decision' | 'reasoning' | 'learning' | 'pivot' | 'rejected' | 'constraint' | 'assumption' | 'open' | 'definition' | 'refs' | 'phase'
 export type Section = 'read_first' | 'read_if_needed' | 'decisions' | 'learnings' | 'discarded' | 'in_progress' | 'next' | 'unknowns' | 'stale'
 export type Entry = { n: number; id: string; trailer: string }
 
 export const TRAILER_OPEN = '<!-- ckpt'
 
-export const CLAUSES: Clause[] = ['decision', 'reasoning', 'learning', 'pivot', 'rejected', 'constraint', 'assumption', 'open', 'definition', 'refs']
+// stoa's ten, then `phase` (stint 0.4.0): what just closed, the cue for the /pit hint.
+export const CLAUSES: Clause[] = ['decision', 'reasoning', 'learning', 'pivot', 'rejected', 'constraint', 'assumption', 'open', 'definition', 'refs', 'phase']
 
 // null = journal only (addressable by id, never in the notes).
 export const ROUTE: Record<Clause, Section | null> = {
@@ -24,6 +25,7 @@ export const ROUTE: Record<Clause, Section | null> = {
   refs: 'read_if_needed',
   reasoning: null,
   pivot: null,
+  phase: null,
 }
 
 export const pad = (n: number) => String(n).padStart(2, '0')
@@ -69,6 +71,9 @@ export function trailersOf(answer: string): string[] {
   return (answer.match(/<!-- ckpt[\s\S]*?-->/g) ?? []).map(t => t.trim())
 }
 
+// The answer closes a phase: one of its closed trailers holds a `phase:` clause.
+export const hasPhase = (answer: string) => trailersOf(answer).some(t => parseTrailer(t).some(c => c.type === 'phase'))
+
 // Display only: the stored message and the journal keep the raw trailer.
 export function splitTrailer(text: string): { body: string; trailers: string[]; kinds: string[]; unclosed: boolean } {
   const kinds: string[] = []
@@ -99,7 +104,7 @@ export function hideTrailer(text: string): string {
 // The rule stint ships to the model (prompt.context block, and the notes fallback). Generic: no project paths.
 export const RULE_TEXT = `## Checkpoint trailer
 
-When a turn settles a decision, reveals a non-obvious learning, rejects a path, shifts frame, or leaves an open fork, end your answer with one HTML comment starting \`${TRAILER_OPEN}\` and closing with \`-->\`. Skip it on clarifying, acknowledgement and pure-tool turns. It is recorded in a journal and may be hidden on screen; do not mention it in prose.
+When a turn settles a decision, reveals a non-obvious learning, rejects a path, shifts frame, leaves an open fork, or closes a unit of work, end your answer with one HTML comment starting \`${TRAILER_OPEN}\` and closing with \`-->\`. Skip it on clarifying, acknowledgement and pure-tool turns. It is recorded in a journal and may be hidden on screen; do not mention it in prose.
 
 Inside, use any of these clauses, omit the empty ones, one clause of about 20 words at most, written in your own words rather than quoted, clauses separated by \` · \` or a new line:
 - \`decision:\` choice + why
@@ -112,6 +117,7 @@ Inside, use any of these clauses, omit the empty ones, one clause of about 20 wo
 - \`open:\` unresolved fork
 - \`definition:\` term=meaning
 - \`refs:\` path→anchor or URL
+- \`phase:\` what just closed; only when that unit of work is closed and verified, nothing on it is still open, and the next step does not need this context; never for an ordinary decision
 
 Keep the \`${TRAILER_OPEN}\` opener exactly as written: tools find trailers by it.`
 

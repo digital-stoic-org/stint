@@ -48,6 +48,7 @@ import {
   streamsFromNames,
 } from '../hooks/pit.ts'
 import { CHECKPOINT_KEY, RULE_BLOCK, RULE_TEXT, journalRule } from '../hooks/checkpoint.ts'
+import { PHASE_FOLLOW_TURNS, PHASE_HINT, PHASE_HINT_FLOOR, phaseHintText } from '../hooks/pit.ts'
 
 // ---------- pure functions ----------
 
@@ -369,10 +370,10 @@ const asmE = (lines: string[], extra: AsmE = {}) => {
   return r
 }
 
-test('L5 routing: clauses copied verbatim with their id into ROUTE sections; reasoning and pivot stay in the journal; cursor = last id', () => {
+test('L5 routing: clauses copied verbatim with their id into ROUTE sections; reasoning, pivot and phase stay in the journal; cursor = last id', () => {
   const r = asmE(['decisions:', '- assemble by code — the fork cannot copy', 'unknowns:', '- does answer keep html comments'], {
     entries: [
-      ent(1, 'decision: use code · reasoning: because x · learning: L1 · pivot: P1'),
+      ent(1, 'decision: use code · reasoning: because x · learning: L1 · pivot: P1 · phase: lot L4 closed'),
       { n: 2, id: 'c02', trailer: '<!-- ckpt\nrejected: tried A — too slow\nconstraint: no git\nopen: who owns X?\nassumption: cwd is stable\ndefinition: stream=named journal\nrefs: /w/a.md→§2\n-->' },
     ],
   })
@@ -384,6 +385,7 @@ test('L5 routing: clauses copied verbatim with their id into ROUTE sections; rea
   expect(section(r.state, 'read_if_needed')).toEqual(['/w/a.md→§2 (c02)'])
   expect(r.state).not.toContain('because x')
   expect(r.state).not.toContain('P1')
+  expect(r.state).not.toContain('lot L4 closed')
   expect(r.state).toContain('journal: /work/.stint/proj-journal.md\njournal_cursor: c02')
   expect(r.cursor).toBe('c02')
 })
@@ -2381,4 +2383,162 @@ test('default stream: a second /rename, or a rename of an explicitly bound sessi
   await answer($, TRAIL2)
   await title($, 'third')
   expect(w.files.has(`${CWD}/.stint/third-journal.md`)).toBe(false)
+})
+
+// ---------- phase hint (0.4.0) ----------
+
+const PHASE = '<!-- ckpt decision: ship P1 · phase: P1 closed and tested -->'
+// 200k window, wall 200k: fill = tokens / 2000 %, auto-pit ceiling 80%, red zone from 70%
+const FILL = (pct: number) => ({ tokens: pct * 2000, wall: 200_000 })
+// The board as the band draws it (the plugin's own status.ts, not this file's copy). Raising the band moves pit's lines off the status line: status checks come first.
+const boardNow = async ($: Engine) => {
+  const text = await bandNow($)
+  return text.slice(text.indexOf('📋 ') + 3)
+}
+
+async function phaseWorld($: Engine, on: On, pct = 45) {
+  const w = world(on, OK())
+  withStat(w, on)
+  checkpointRow(on)
+  w.usage = FILL(pct)
+  await fresh($)
+  await title($, 'proj')
+  return w
+}
+
+test('phaseHintText: plain, or with the auto-pit ceiling when the fill is in the red zone; auto-pit off = plain', () => {
+  expect(PHASE_HINT).toBe('good moment to /pit')
+  expect(PHASE_HINT_FLOOR).toBe(0.4)
+  expect(phaseHintText(90_000, 200_000, 80)).toBe(PHASE_HINT)
+  expect(phaseHintText(130_000, 200_000, 80)).toBe(PHASE_HINT)
+  expect(phaseHintText(140_000, 200_000, 80)).toBe(`${PHASE_HINT} · auto at 80%`)
+  expect(phaseHintText(150_000, 200_000, 75)).toBe(`${PHASE_HINT} · auto at 75%`)
+  expect(phaseHintText(150_000, 200_000, null)).toBe(PHASE_HINT)
+})
+
+test('phase hint: an answer with phase: at fill >= 40% puts the hint on the board; where there is no band, the status line keeps the dash with the hint in its board', async ($, on) => {
+  const w = await phaseWorld($, on, 40)
+  await answer($, `Done.\n${PHASE}`)
+  expect(lastStatus(w)).toMatch(new RegExp(`revs .*📋 ${PHASE_HINT}$`))
+  expect(await boardNow($)).toBe(PHASE_HINT)
+})
+
+test('phase hint: under the floor, without phase:, or with phase: only in the prose there is no hint', async ($, on) => {
+  const w = await phaseWorld($, on, 39)
+  await answer($, `Done.\n${PHASE}`)
+  expect(await boardNow($)).not.toContain(PHASE_HINT)
+  w.usage = FILL(50)
+  await answer($, `Done.\n${TRAIL1}`)
+  expect(await boardNow($)).not.toContain(PHASE_HINT)
+  await answer($, 'next phase: tests')
+  expect(await boardNow($)).not.toContain(PHASE_HINT)
+})
+
+test('phase hint: gone at the next prompt, at the next answer without phase:, after an aborted turn, and at /clear', async ($, on) => {
+  const w = await phaseWorld($, on)
+  await answer($, PHASE)
+  expect(await boardNow($)).toBe(PHASE_HINT)
+  await typed($)
+  expect(await boardNow($)).not.toContain(PHASE_HINT)
+  await answer($, PHASE)
+  expect(await boardNow($)).toBe(PHASE_HINT)
+  await answer($, TRAIL1)
+  expect(await boardNow($)).not.toContain(PHASE_HINT)
+  await answer($, PHASE)
+  await turnDone($, { reason: 'aborted', answer: PHASE })
+  expect(await boardNow($)).not.toContain(PHASE_HINT)
+  await answer($, PHASE)
+  await clear($)
+  expect(await boardNow($)).not.toContain(PHASE_HINT)
+  expect(w.forkPrompts).toHaveLength(0)
+})
+
+test('phase hint: the trailer of the same turn counts, and the journal still gets it (journal only, no notes route)', async ($, on) => {
+  const w = await phaseWorld($, on)
+  await answer($, PHASE)
+  expect(await boardNow($)).toBe(PHASE_HINT)
+  expect(w.files.get(JOURNAL)).toContain('phase: P1 closed and tested')
+})
+
+test('phase hint: a subagent answer with phase: shows nothing', async ($, on) => {
+  await phaseWorld($, on)
+  await answer($, PHASE, { agentId: 'a1' })
+  expect(await boardNow($)).not.toContain(PHASE_HINT)
+})
+
+test('phase hint: in the red zone it carries the auto-pit ceiling; with auto-pit off it does not', async ($, on) => {
+  const w = await phaseWorld($, on, 75)
+  await answer($, PHASE)
+  expect(await boardNow($)).toBe(`${PHASE_HINT} · auto at 80%`)
+  await w.clock.advance(5)
+  expect(w.forkPrompts).toHaveLength(0)
+  w.mode = 'off'
+  await setAutopit($, 'off')
+  await answer($, PHASE)
+  expect(await boardNow($)).toBe(PHASE_HINT)
+})
+
+test('phase hint: pit\'s other lines come first; the hint shows again once they are gone', async ($, on) => {
+  const w = await phaseWorld($, on)
+  await answer($, PHASE)
+  expect(await boardNow($)).toBe(PHASE_HINT)
+  await pit($, 'proj --save')
+  expect(await boardNow($)).not.toContain(PHASE_HINT)
+  await w.clock.advance(60_000)
+  expect(await boardNow($)).toBe(PHASE_HINT)
+})
+
+test('phase hint: checkpoint off = never shown, even with phase: in the answer', async ($, on) => {
+  await phaseWorld($, on)
+  await setCheckpointRow($, 'off')
+  await answer($, PHASE)
+  expect(await boardNow($)).not.toContain(PHASE_HINT)
+  await setCheckpointRow($, 'on')
+  await answer($, PHASE)
+  expect(await boardNow($)).toBe(PHASE_HINT)
+})
+
+test('phase hint: no fill figure from the host shows nothing and the turn goes on', async ($, on) => {
+  const w = await phaseWorld($, on)
+  w.usage = { wall: 200_000 }
+  await answer($, PHASE)
+  expect(await boardNow($)).not.toContain(PHASE_HINT)
+  expect(w.files.get(JOURNAL)).toContain('phase:')
+})
+
+test('phase trace (debug on): emitted with the fill, shown, cleared with its reason, metadata only', { ...DEBUG }, async ($, on) => {
+  const w = await phaseWorld($, on, 45)
+  await answer($, PHASE)
+  await typed($)
+  w.usage = FILL(30)
+  await answer($, PHASE)
+  const evs = (await traced(w)).filter(e => e.ev.startsWith('phase.'))
+  expect(evs.map(e => [e.ev, e.detail])).toEqual([
+    ['phase.emitted', { pct: 45, floor: 40, hint: true, turn: 1 }],
+    ['phase.hint', { state: 'shown', why: 'answer', pct: 45 }],
+    ['phase.hint', { state: 'cleared', why: 'prompt' }],
+    ['phase.emitted', { pct: 30, floor: 40, hint: false, turn: 2 }],
+  ])
+  expect(JSON.stringify(evs)).not.toContain('P1 closed')
+})
+
+test('phase trace (debug on): a /pit within 3 turns of a phase: answer is traced as followed; after 4 it is not', { ...DEBUG }, async ($, on) => {
+  expect(PHASE_FOLLOW_TURNS).toBe(3)
+  const w = await phaseWorld($, on)
+  await answer($, PHASE)
+  for (let i = 0; i < 3; i++) await answer($, 'x')
+  await pit($, 'proj --save')
+  let follows = (await traced(w)).filter(e => e.ev === 'phase.followed')
+  expect(follows.map(e => e.detail)).toEqual([{ turns: 3, hinted: true, save: true }])
+  await answer($, 'x')
+  await pit($, 'proj --save')
+  follows = (await traced(w)).filter(e => e.ev === 'phase.followed')
+  expect(follows).toHaveLength(1)
+})
+
+test('phase trace (debug off): nothing traced', async ($, on) => {
+  const w = await phaseWorld($, on)
+  await answer($, PHASE)
+  await pit($, 'proj --save')
+  expect(w.store.has('stint:trace')).toBe(false)
 })

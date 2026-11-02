@@ -1,7 +1,7 @@
 import type { EngineInterface, On } from 'claude-code'
 
-import { pitDone, pitStart, refresh as refreshDash, setLap } from './dash.ts'
-import { ROUTE, RULE_TEXT, captureCkpt, checkpointOn, claudeMdHasRule, journalPath, journalRule, parseJournal, parseTrailer, withRule } from './checkpoint.ts'
+import { pitDone, pitStart, refresh as refreshDash, setLap, zoneOf } from './dash.ts'
+import { ROUTE, RULE_TEXT, captureCkpt, checkpointOn, claudeMdHasRule, hasPhase, journalPath, journalRule, parseJournal, parseTrailer, withRule } from './checkpoint.ts'
 import type { Entry } from './checkpoint.ts'
 import { debugOn, sidNow, startWatch, stopWatch, trace, writeReport } from './debug.ts'
 import { AUTOPIT_CEILING, AUTOPIT_MIN_TOKENS, getAutopitInfo, getIdleFire, setAutopitInfo, setIdleFire, setPitBoard, setPitLine, writeStatus } from './status.ts'
@@ -189,6 +189,19 @@ export function ceilingTokens(window: number, wall: number): number {
 // The same ceiling as a whole % of the window, rounded down: what the board and the toast say ("auto-pit at 75%").
 export function ceilingPercent(window: number, wall: number): number {
   return Math.floor((ceilingTokens(window, wall) / window) * 100 + 1e-9)
+}
+
+// ---------- phase hint: pure parts ----------
+
+// An answer whose trailer holds `phase:` (a unit of work closed) at or above this share of the window shows the hint until the next prompt. A hint only: never a pit.
+export const PHASE_HINT_FLOOR = 0.4
+export const PHASE_HINT = 'good moment to /pit'
+// A /pit this many main turns or fewer after a phase answer is traced as following it (measurement only).
+export const PHASE_FOLLOW_TURNS = 3
+
+// The hint outranks the zone messages on the board; when it hides the auto-pit one (the red zone), it carries the ceiling. `ceilingPct` null = auto-pit off.
+export function phaseHintText(tokens: number, window: number, ceilingPct: number | null): string {
+  return ceilingPct !== null && zoneOf(tokens, window, ceilingPct) === 3 ? `${PHASE_HINT} · auto at ${ceilingPct}%` : PHASE_HINT
 }
 
 // null = off; else the idle wait before the pit, in ms.
@@ -680,6 +693,11 @@ let flowLine: Line | undefined
 let ticker: { cancel: () => void } | null = null
 let outcome: Line | undefined
 let hint: Line | undefined
+// The phase hint (0.4.0): board only (empty status), the lowest of pit's lines. Shown after an answer with `phase:` at fill >= PHASE_HINT_FLOOR, gone at the next prompt, the next answer and every session start.
+let phase: Line | undefined
+// Main-loop turn ends of this session, and the last one whose answer held `phase:` (with its session id): what the follow trace measures from.
+let mainTurns = 0
+let phaseAt: { turn: number; sid: string | undefined; hinted: boolean } | null = null
 
 const current = () => resolveStream(boundArg, titleStream, autoStream)
 
@@ -702,7 +720,7 @@ let autoAborted = false
 
 // pit's own lines (flow, outcome, hint) come first; with none, the dash line (status.ts).
 function paint($: EngineInterface) {
-  const line = flowLine ?? outcome ?? hint
+  const line = flowLine ?? outcome ?? hint ?? phase
   setPitLine(line?.status || undefined)
   setPitBoard(line ? { text: line.board, ...(line.bad ? { bad: true } : {}) } : undefined)
   writeStatus($)
@@ -1190,6 +1208,7 @@ async function runPit($: EngineInterface, argStream: string | undefined, auto?: 
   const cwd = await rootNow($)
   const room = await headroom($)
   trace($, 'pit.start', { cwd: await $.session.cwd(), root: cwd, headroom: room, ...(auto ? { auto: true } : {}), ...(save ? { save: true } : {}) }, current())
+  if (debugOn()) await traceFollow($, auto !== undefined, save)
   if (room && overWall(room.tokens, room.wall)) {
     const pct = Math.round((room.tokens / room.wall) * 100)
     const text = `pit: context is at ${pct}% of the limit where the host compacts on its own (${room.tokens} of ${room.wall} tokens); the save runs in this context and would fail there. Nothing saved, the session is unchanged.`
@@ -1374,6 +1393,61 @@ async function journalCkpt($: EngineInterface, answer: string) {
   }
 }
 
+// ---------- phase hint ----------
+
+// The fill of the context as dash shows it (% of the model window), the tokens behind it, and the auto-pit ceiling this read gives (null = auto-pit off). null = no figure.
+async function phaseFill($: EngineInterface): Promise<{ pct: number; tokens: number; window: number; ceiling: number | null } | null> {
+  try {
+    const { context } = await $.session.usage({ breakdown: 'summary' })
+    const window = context.window > 0 ? context.window : 200_000
+    const pct = context.percent ?? (context.tokens !== undefined ? (context.tokens / window) * 100 : undefined)
+    if (pct === undefined) return null
+    const wall = context.breakdown?.autoCompactThreshold ?? context.breakdown?.rawMaxTokens ?? window
+    const ceiling = autopitDelayMs(await modeNow($)) === null ? null : wall > 0 ? ceilingPercent(window, wall) : (ceilingPct ?? Math.round(AUTOPIT_CEILING * 100))
+    return { pct, tokens: context.tokens ?? Math.round((pct / 100) * window), window, ceiling }
+  } catch {
+    return null
+  }
+}
+
+function dropPhase($: EngineInterface, why: string) {
+  if (phase === undefined) return
+  phase = undefined
+  trace($, 'phase.hint', { state: 'cleared', why }, current())
+}
+
+// After each main-loop turn end: the hint of the previous answer goes; this answer's `phase:` shows it again when the context is full enough. Checkpoint off = never shown. Never throws.
+async function notePhase($: EngineInterface, answer: string) {
+  try {
+    mainTurns++
+    const was = phase !== undefined
+    dropPhase($, 'answer')
+    if (!checkpointOn() || !hasPhase(answer)) {
+      if (was) paint($)
+      return
+    }
+    const fill = await phaseFill($)
+    const show = fill !== null && fill.pct >= PHASE_HINT_FLOOR * 100
+    phaseAt = { turn: mainTurns, sid: await sidNow($), hinted: show }
+    trace($, 'phase.emitted', { pct: fill === null ? null : Math.round(fill.pct), floor: PHASE_HINT_FLOOR * 100, hint: show, turn: mainTurns }, current())
+    if (show) {
+      phase = { status: '', board: phaseHintText(fill.tokens, fill.window, fill.ceiling) }
+      trace($, 'phase.hint', { state: 'shown', why: 'answer', pct: Math.round(fill.pct) }, current())
+    }
+    if (show || was) paint($)
+  } catch (err) {
+    $.ui.log(`stint: phase hint not updated: ${String(err)}`, { to: 'debug' })
+  }
+}
+
+// Debug only: a pit that comes within PHASE_FOLLOW_TURNS main turns of a `phase:` answer of this session.
+async function traceFollow($: EngineInterface, auto: boolean, save: boolean) {
+  if (phaseAt === null) return
+  const turns = mainTurns - phaseAt.turn
+  if (turns > PHASE_FOLLOW_TURNS || phaseAt.sid !== (await sidNow($))) return
+  trace($, 'phase.followed', { turns, hinted: phaseAt.hinted, ...(auto ? { auto: true } : {}), ...(save ? { save: true } : {}) }, current())
+}
+
 export function registerPit(on: On) {
   ceilingPct = undefined
   setAutopitInfo(undefined)
@@ -1400,6 +1474,8 @@ export function registerPit(on: On) {
         lastTurnAt = await $.clock.now()
         // The checkpoint trailers of this answer are journaled before an auto-pit can fork: the fork then sees them.
         if (e.reason === 'answer') await journalCkpt($, e.answer)
+        // The same answer's `phase:` decides the hint; an aborted or failed turn just drops it.
+        await notePhase($, e.reason === 'answer' ? e.answer : '')
         // The ready turn of an auto-pit never re-triggers: neither the idle wait nor the ceiling.
         if (skipNextArm) skipNextArm = false
         else {
@@ -1458,9 +1534,10 @@ export function registerPit(on: On) {
     turnRunning = true
     cancelAutopit($)
     if (autoRunning) autoAborted = true
-    // The hint was seen: it goes at the first prompt.
-    if (hint !== undefined) {
+    // The hints were seen: they go at the first prompt.
+    if (hint !== undefined || phase !== undefined) {
       hint = undefined
+      dropPhase($, 'prompt')
       paint($)
     }
     // A mod loaded mid-session never saw the session start.
@@ -1475,6 +1552,10 @@ export function registerPit(on: On) {
   on('classic.SessionStart', async ($, e, next) => {
     trace($, 'session.start', { source: e.source, sid: e.session_id, cwd: e.cwd })
     hint = undefined
+    // A new context: the phase hint and the follow measure belong to the old one.
+    dropPhase($, 'session')
+    phaseAt = null
+    mainTurns = 0
     outcome = undefined
     // A new context: no idle period carries over, and the next turn.complete starts a fresh one.
     cancelAutopit($)

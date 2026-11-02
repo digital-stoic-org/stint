@@ -1,20 +1,21 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
-import { APPEND_TRIES, CLAUSES, RULE_TEXT, ROUTE, checkpointOn, entryText, hideTrailer, journalPath, journalRule, maxId, pad, parseJournal, parseTrailer, setCheckpoint, splitTrailer, trailersOf } from '../hooks/checkpoint.ts'
+import { APPEND_TRIES, CLAUSES, RULE_TEXT, ROUTE, checkpointOn, entryText, hasPhase, hideTrailer, journalPath, journalRule, maxId, pad, parseJournal, parseTrailer, setCheckpoint, splitTrailer, trailersOf } from '../hooks/checkpoint.ts'
 
 const TRAILER = '<!-- ckpt decision: keep A · reasoning: B follows -->'
 
 // ---------- menu and routing ----------
 
-test('CLAUSES: stoa\'s ten, in order', () => {
-  expect(CLAUSES).toEqual(['decision', 'reasoning', 'learning', 'pivot', 'rejected', 'constraint', 'assumption', 'open', 'definition', 'refs'])
+test('CLAUSES: stoa\'s ten, in order, then phase', () => {
+  expect(CLAUSES).toEqual(['decision', 'reasoning', 'learning', 'pivot', 'rejected', 'constraint', 'assumption', 'open', 'definition', 'refs', 'phase'])
 })
 
-test('ROUTE: every clause has an entry; reasoning and pivot are journal-only', () => {
+test('ROUTE: every clause has an entry; reasoning, pivot and phase are journal-only', () => {
   expect(Object.keys(ROUTE).sort()).toEqual([...CLAUSES].sort())
   expect(ROUTE.reasoning).toBeNull()
   expect(ROUTE.pivot).toBeNull()
+  expect(ROUTE.phase).toBeNull()
   expect(ROUTE.decision).toBe('decisions')
   expect(ROUTE.constraint).toBe('decisions')
   expect(ROUTE.learning).toBe('learnings')
@@ -26,6 +27,25 @@ test('ROUTE: every clause has an entry; reasoning and pivot are journal-only', (
 })
 
 // ---------- parseTrailer ----------
+
+test('parseTrailer: phase alone and among other clauses', () => {
+  expect(parseTrailer('<!-- ckpt phase: L5 shipped and tested -->')).toEqual([{ type: 'phase', text: 'L5 shipped and tested' }])
+  expect(parseTrailer('<!-- ckpt decision: keep A · phase: P1 closed\nopen: P2 order -->')).toEqual([
+    { type: 'decision', text: 'keep A' },
+    { type: 'phase', text: 'P1 closed' },
+    { type: 'open', text: 'P2 order' },
+  ])
+})
+
+test('hasPhase: a closed trailer with a phase clause; none, an empty one, an unclosed one or the word in prose do not count', () => {
+  expect(hasPhase('done\n\n<!-- ckpt decision: a · phase: lot closed -->')).toBe(true)
+  expect(hasPhase('<!-- ckpt decision: a -->\n<!-- ckpt phase: b -->')).toBe(true)
+  expect(hasPhase('<!-- ckpt decision: a phase: b -->')).toBe(false)
+  expect(hasPhase('<!-- ckpt phase:  -->')).toBe(false)
+  expect(hasPhase('next phase: tests\n<!-- ckpt decision: a -->')).toBe(false)
+  expect(hasPhase('<!-- ckpt phase: still streaming')).toBe(false)
+  expect(hasPhase('')).toBe(false)
+})
 
 test('parseTrailer: splits on clause keywords, strips separators', () => {
   expect(parseTrailer(TRAILER)).toEqual([
@@ -164,10 +184,20 @@ test('hideTrailer: idempotent', () => {
 
 // ---------- RULE_TEXT ----------
 
-test('RULE_TEXT: teaches the opener and all ten clauses, names no project path', () => {
+test('RULE_TEXT: teaches the opener and all eleven clauses, names no project path', () => {
   expect(RULE_TEXT).toContain('<!-- ckpt')
   for (const c of CLAUSES) expect(RULE_TEXT).toContain(`\`${c}:\``)
   expect(RULE_TEXT).not.toMatch(/praxis|CLAUDE\.md|\.claude\/|\/repos\//i)
+})
+
+test('RULE_TEXT: phase is taught with the strict condition, and closing a unit of work is a reason to write a trailer', () => {
+  const line = RULE_TEXT.split('\n').find(l => l.startsWith('- `phase:`')) ?? ''
+  expect(line).toContain('what just closed')
+  expect(line).toContain('closed and verified')
+  expect(line).toContain('nothing on it is still open')
+  expect(line).toContain('the next step does not need this context')
+  expect(line).toContain('never for an ordinary decision')
+  expect(RULE_TEXT).toContain('or closes a unit of work, end your answer')
 })
 
 test('RULE_TEXT: tells the model how to separate clauses (a clause glued after a space is not parsed)', () => {
