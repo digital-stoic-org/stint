@@ -43,6 +43,7 @@ import {
   slugify,
   streamsFromNames,
 } from '../hooks/pit.ts'
+import { RULE_BLOCK, RULE_TEXT, journalRule } from '../hooks/checkpoint.ts'
 
 // ---------- pure functions ----------
 
@@ -1778,4 +1779,185 @@ test('/pit --save and auto-pit: an auto-pit that fires during a save skips, and 
   expect(w.forkPrompts).toHaveLength(1)
   expect(w.clears).toBe(0)
   expect(w.store.get('stint:pending')).toBeUndefined()
+})
+
+// ---------- checkpoint capture (L2) ----------
+
+const TRAIL1 = '<!-- ckpt decision: keep A · reasoning: B follows -->'
+const TRAIL2 = '<!-- ckpt open: which stream? -->'
+const JOURNAL = `${CWD}/.stint/proj-journal.md`
+// The world has no fs.stat: the journal write needs the size of the file it reads.
+function withStat(w: World, on: On) {
+  on('fs.stat', (_$, e) => {
+    const text = w.files.get(e.path)
+    return text === undefined ? { deny: 'ENOENT' } : ({ value: { kind: 'file', size: text.length, mtimeMs: 0, isLink: false } } as never)
+  })
+}
+const answer = ($: Engine, text: string, extra: Record<string, unknown> = {}) => turnDone($, { answer: text, ...extra })
+
+test('checkpoint: an answer with two trailers writes two entries, in order, under the root', async ($, on) => {
+  const w = world(on, OK())
+  withStat(w, on)
+  await fresh($)
+  await title($, 'proj')
+  await answer($, `Done.\n${TRAIL1}\nand\n${TRAIL2}`)
+  const j = w.files.get(JOURNAL) ?? ''
+  expect(j).toMatch(/^### c01 \S+ sess-1\n<!-- ckpt decision: keep A/)
+  expect(j).toContain(`### c02 `)
+  expect(j.indexOf(TRAIL1)).toBeLessThan(j.indexOf(TRAIL2))
+  await answer($, `More.\n${TRAIL2}`)
+  expect(w.files.get(JOURNAL)).toContain('### c03 ')
+})
+
+test('checkpoint: no trailer, an aborted turn and a sub-agent turn write nothing', async ($, on) => {
+  const w = world(on, OK())
+  withStat(w, on)
+  await fresh($)
+  await title($, 'proj')
+  await answer($, 'plain answer')
+  await answer($, TRAIL1, { reason: 'aborted', isAborted: true })
+  await answer($, TRAIL1, { agentId: 'agent-1' })
+  expect([...w.files.keys()].some(p => p.endsWith('-journal.md'))).toBe(false)
+})
+
+test('checkpoint: the journal is anchored on the session root, not the cwd', async ($, on) => {
+  const w = world(on, OK())
+  withStat(w, on)
+  w.cwd = '/elsewhere/sub'
+  await fresh($)
+  await title($, 'proj')
+  await answer($, TRAIL1)
+  expect(w.files.has(JOURNAL)).toBe(true)
+  expect([...w.files.keys()].some(p => p.startsWith('/elsewhere'))).toBe(false)
+})
+
+test('checkpoint: before any title the stream is main', async ($, on) => {
+  const w = world(on, OK())
+  withStat(w, on)
+  await fresh($)
+  await answer($, TRAIL1)
+  expect(w.files.has(`${CWD}/.stint/main-journal.md`)).toBe(true)
+})
+
+test('checkpoint: an existing journal keeps its entries and the ids continue', async ($, on) => {
+  const w = world(on, OK())
+  withStat(w, on)
+  w.files.set(JOURNAL, '### c07 2026-01-01T00:00:00.000Z old\n<!-- ckpt open: x -->\n\n')
+  await fresh($)
+  await title($, 'proj')
+  await answer($, TRAIL1)
+  const j = w.files.get(JOURNAL) ?? ''
+  expect(j.startsWith('### c07 2026-01-01T00:00:00.000Z old')).toBe(true)
+  expect(j).toContain('### c08 ')
+})
+
+test('checkpoint: a failed journal write never throws, shows one red board line, and the turn goes on', async ($, on) => {
+  const w = world(on, OK())
+  withStat(w, on)
+  await fresh($)
+  await title($, 'proj')
+  w.failWrites = true
+  await answer($, TRAIL1)
+  expect(w.statuses.some(s => (s ?? '').includes('checkpoint not journaled'))).toBe(true)
+  w.failWrites = false
+  await answer($, TRAIL2)
+  expect(w.files.get(JOURNAL)).toContain('### c01 ')
+})
+
+// ---------- checkpoint rule delivery (L4) ----------
+
+// The engine's own answer stands under the mod: the input blocks, unchanged.
+const baseContext = (on: On) => on('prompt.context', (_$, e) => ({ blocks: e.blocks }))
+const ctx = ($: Engine, claudeMd?: string) =>
+  $.prompt.context({
+    blocks: [...(claudeMd === undefined ? [] : [{ name: 'claudeMd', text: claudeMd }]), { name: 'userEmail', text: 'a@b.c' }, { name: 'currentDate', text: '2026-11-01' }],
+  } as never)
+
+test('prompt.context: a stintCheckpoint block with the rule and the journal rule is added after the engine\'s own blocks', async ($, on) => {
+  world(on, OK())
+  baseContext(on)
+  await fresh($)
+  await title($, 'proj')
+  const r = await ctx($, 'Be brief.')
+  expect(r.blocks.map(b => b.name)).toEqual(['claudeMd', 'userEmail', 'currentDate', RULE_BLOCK])
+  const block = r.blocks[3]!.text
+  expect(block).toContain(RULE_TEXT)
+  expect(block).toContain(journalRule(JOURNAL))
+})
+
+test('prompt.context: no claudeMd block counts as no rule, the block is added', async ($, on) => {
+  world(on, OK())
+  baseContext(on)
+  await fresh($)
+  const r = await ctx($)
+  expect(r.blocks.map(b => b.name)).toEqual(['userEmail', 'currentDate', RULE_BLOCK])
+})
+
+test('prompt.context: skipped when the claudeMd text already holds the trailer opener', async ($, on) => {
+  world(on, OK())
+  baseContext(on)
+  await fresh($)
+  const r = await ctx($, 'rules ... end with one comment starting `<!-- ckpt` ...')
+  expect(r.blocks.map(b => b.name)).toEqual(['claudeMd', 'userEmail', 'currentDate'])
+})
+
+test('prompt.context: the opener inside another block than claudeMd does not count, and the block is never added twice', async ($, on) => {
+  world(on, OK())
+  baseContext(on)
+  await fresh($)
+  const r = await $.prompt.context({ blocks: [{ name: 'claudeMd', text: 'x' }, { name: 'attachedProject', text: '<!-- ckpt' }, { name: RULE_BLOCK, text: 'already' }] } as never)
+  expect(r.blocks.map(b => b.name)).toEqual(['claudeMd', 'attachedProject', RULE_BLOCK])
+  expect(r.blocks[2]!.text).toBe('already')
+  const r2 = await ctx($, 'x')
+  expect(r2.blocks.filter(b => b.name === RULE_BLOCK)).toHaveLength(1)
+})
+
+test('prompt.context: a block of the engine passes through with its text untouched', async ($, on) => {
+  world(on, OK())
+  baseContext(on)
+  await fresh($)
+  const r = await ctx($, 'Be brief.')
+  expect(r.blocks[0]).toEqual({ name: 'claudeMd', text: 'Be brief.' })
+})
+
+test('notes re-injection: a stream journaled by this process gets the rule and the journal rule after the notes', async ($, on) => {
+  const w = world(on, OK())
+  withStat(w, on)
+  baseContext(on)
+  await fresh($)
+  await title($, 'proj')
+  await ctx($, 'Be brief.')
+  await answer($, TRAIL1)
+  await pitAndClear($, w)
+  const sent = w.submits[0] ?? ''
+  expect(sent).toContain(RULE_TEXT)
+  expect(sent).toContain(journalRule(JOURNAL))
+  expect(sent.indexOf(RULE_TEXT)).toBeGreaterThan(sent.indexOf('stream: proj'))
+  expect(sent.endsWith(UNPACK_RULES)).toBe(true)
+})
+
+test('notes re-injection: when the instructions hold the rule only the journal rule is added', async ($, on) => {
+  const w = world(on, OK())
+  withStat(w, on)
+  baseContext(on)
+  await fresh($)
+  await title($, 'proj')
+  await ctx($, 'comment starting `<!-- ckpt`')
+  await answer($, TRAIL1)
+  await pitAndClear($, w)
+  const sent = w.submits[0] ?? ''
+  expect(sent).toContain(journalRule(JOURNAL))
+  expect(sent).not.toContain(RULE_TEXT)
+})
+
+test('notes re-injection: a stream with no journal entry is injected exactly as before', async ($, on) => {
+  const w = world(on, OK())
+  withStat(w, on)
+  baseContext(on)
+  await fresh($)
+  await title($, 'proj')
+  await ctx($, 'Be brief.')
+  await answer($, 'no trailer here')
+  await pitAndClear($, w)
+  expect(w.submits).toEqual([injectText(w.files.get(NOTES) ?? '')])
 })

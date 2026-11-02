@@ -271,6 +271,9 @@
 #v3 .road-r a:focus-visible{outline:3px solid var(--signal);outline-offset:3px}
 #v3 .road-list{list-style:none;margin:0;padding:0;font:600 13px/1.6 var(--mono);color:var(--ink-soft)}
 #v3 .road-list li{margin:0}
+#v3 .road-r{align-items:flex-start;gap:12px 32px}
+#v3 .road-r > a{align-self:flex-end}
+#v3 .road-h{margin:0 0 4px;font:700 11px/1.3 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--signal)}
 #v3 .road-list code{font:600 .92em var(--mono);background:var(--ink);color:var(--paper);padding:1px 6px;margin-right:6px}
 
 @keyframes v3-flash{0%{background:rgba(255,154,85,.55);transform:scale(1.12)}100%{background:transparent;transform:scale(1)}}
@@ -588,14 +591,14 @@
           <span class="no">2</span>
           <div>
             <h3>Pit.</h3>
-            <p><code>/pit</code>: the agent writes its notes, the context clears itself, and the notes come back as the first message of a fresh window. Driver change, same race. <code>/pit --save</code> saves without clearing, archives the previous notes in <code>.stint/archive/</code>, and warns if another session rewrote them. Auto-pit does the same by itself when the session sits idle, or when the context reaches its ceiling.</p>
+            <p><code>/pit</code>: the agent writes its notes, the context clears itself, and the notes come back as the first message of a fresh window. Driver change, same race. <code>/pit --save</code> saves without clearing. Every save first copies the previous notes to <code>.stint/archive/</code>, and warns if another session rewrote them. Auto-pit does the same by itself after 50 minutes idle, or right after a turn that reaches its ceiling. It holds off while a draft sits in your prompt or an agent is busy.</p>
           </div>
         </li>
         <li>
           <span class="no">3</span>
           <div>
             <h3>Rejoin.</h3>
-            <p><code>/rejoin</code>: next morning, new session, same stream. The notes go in first. Resuming after the prompt cache has expired re-sends the whole context. On a subscription, the idle auto-pit pits before that happens (<a href="why-pit.html">details &rarr;</a>).</p>
+            <p><code>/rejoin</code>: next morning, new session, same stream. The notes go in first. Resuming after the prompt cache has expired re-sends the whole context. The idle auto-pit fires before a 1-hour cache expires, and the band warns when your cache is on 5 minutes (<a href="why-pit.html">details &rarr;</a>).</p>
             <span class="hand">pick up where you left off</span>
           </div>
         </li>
@@ -612,7 +615,7 @@
           <tr><td class="m">🚨</td><td class="m">ceiling − 10 pts</td><td>auto-pit at N%</td></tr>
         </tbody>
       </table>
-      <p class="req">Zones are rules of thumb (Horthy 2025). On a window under 200k, 🔥 starts earlier than 80k. The ceiling (N) depends on your window, and 🚨 shows only while auto-pit is on.</p>
+      <p class="req">Zones are rules of thumb (Horthy 2025). On a window under 200k, 🔥 starts earlier than 80k. The ceiling (N) is 80% of your window, or 90% of the point where Claude Code compacts if that comes first. 🚨 never starts before 🔶, and shows only while auto-pit is on.</p>
       </div>
     </div>
   </div>
@@ -653,15 +656,28 @@
 <div class="roadbar" id="roadmap">
   <div class="wrap roadbar-in">
     <div class="road-l">
-      <p class="eyebrow">Next season · roadmap</p>
+      <p class="eyebrow">Roadmap</p>
       <p class="road-t">More mods are on the grid.</p>
     </div>
     <div class="road-r">
-      <ul class="road-list">
-        <li><code>checkpoint</code> Logs the moments that matter, builds notes</li>
-        <li><code>radio</code> Warns the model as context climbs</li>
-        <li><code>team</code> Agent teams, run like a pit crew</li>
-      </ul>
+      <div class="road-g">
+        <p class="road-h">On track · shipped</p>
+        <ul class="road-list">
+          <li><code>pit</code> Saves the notes, clears, reloads them</li>
+          <li><code>rejoin</code> Loads a stream's notes in a new session</li>
+          <li><code>dash</code> The band: revs, fuel, stint, board</li>
+          <li><code>auto-pit</code> Pits by itself when idle or at the ceiling</li>
+          <li><code>checkpoint</code> Logs the moments that matter, builds notes</li>
+          <li><code>debug</code> Traces a pit whose notes did not come back</li>
+        </ul>
+      </div>
+      <div class="road-g">
+        <p class="road-h">Next season</p>
+        <ul class="road-list">
+          <li><code>radio</code> Warns the model as context climbs</li>
+          <li><code>team</code> Agent teams, run like a pit crew</li>
+        </ul>
+      </div>
       <a href="https://github.com/digital-stoic-org/stint">Watch the repo on GitHub &rarr;</a>
     </div>
   </div>

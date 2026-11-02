@@ -1,6 +1,7 @@
 import type { EngineInterface, On } from 'claude-code'
 
 import { pitDone, pitStart, refresh as refreshDash, setLap } from './dash.ts'
+import { RULE_TEXT, captureCkpt, claudeMdHasRule, journalPath, journalRule, withRule } from './checkpoint.ts'
 import { debugOn, sidNow, startWatch, stopWatch, trace, writeReport } from './debug.ts'
 import { AUTOPIT_CEILING, AUTOPIT_MIN_TOKENS, getAutopitInfo, getIdleFire, setAutopitInfo, setIdleFire, setPitBoard, setPitLine, writeStatus } from './status.ts'
 import type { AutopitInfo } from './status.ts'
@@ -780,6 +781,20 @@ async function traceCommand($: EngineInterface) {
 
 // ---------- inject (shared by the fresh start after /clear and /rejoin) ----------
 
+// Set by the prompt.context hook: the project's instructions already teach the checkpoint trailer.
+let claudeHasRule = false
+
+// Streams journaled by this process -> journal path. A stream with a journal gets the rule refreshed after its notes; one with no entry yet adds nothing
+// (the prompt.context block carries the rule from the first request on). Memory only: the injection stays synchronous.
+const journaled = new Map<string, string>()
+
+// What follows the notes: how to read the journal, and the trailer rule unless the project's instructions already hold it.
+const ckptTail = (stream: string): string => {
+  const path = journaled.get(stream)
+  if (path === undefined) return ''
+  return claudeHasRule ? journalRule(path) : `${RULE_TEXT}\n\n${journalRule(path)}`
+}
+
 // Injection = $.prompt.submit({ asUser: true }): it starts a turn, so UNPACK_RULES can hold the model at its acknowledgement line.
 // The host REFUSES prompt.submit called from inside the command.run hook, so /rejoin passes `defer` and the submit runs from a $.clock.after
 // dispatch, after the hook returned. SessionStart submits directly.
@@ -787,8 +802,10 @@ type AutoShow = { line: string; kind: AutoKind; warn?: string | undefined }
 
 function inject($: EngineInterface, stream: string, notes: string, defer: boolean, auto?: AutoShow) {
   const run = () => {
-    trace($, 'inject.submit', { state: 'call', chars: notes.length }, stream)
-    $.prompt.submit({ text: injectText(notes, auto?.line, auto?.kind, auto?.warn), asUser: true }).then(
+    const tail = ckptTail(stream)
+    const shown = tail === '' ? notes : `${notes.trimEnd()}\n\n${tail}`
+    trace($, 'inject.submit', { state: 'call', chars: shown.length }, stream)
+    $.prompt.submit({ text: injectText(shown, auto?.line, auto?.kind, auto?.warn), asUser: true }).then(
       () => trace($, 'inject.submit', { state: 'resolve' }, stream),
       err => {
         trace($, 'inject.submit', { state: 'reject', error: String(err) }, stream)
@@ -1141,6 +1158,30 @@ async function noteTitle(title: string | undefined) {
   if (slug !== null) titleStream = slug
 }
 
+// Journals the trailers of a main-loop answer under the session root; a failed write shows one red board line for a few seconds. Never throws.
+async function journalCkpt($: EngineInterface, answer: string) {
+  try {
+    const stream = current()
+    const root = await rootNow($)
+    const res = await captureCkpt($, root, stream, answer)
+    if (res.ok) {
+      if (res.ids.length > 0) journaled.set(stream, journalPath(root, stream))
+      return
+    }
+    const board = 'checkpoint not journaled: write failed'
+    const line: Line = { status: `⚠ ${board}`, board, bad: true }
+    outcome = line
+    paint($)
+    $.clock.after(ERROR_TOAST_MS, () => {
+      if (outcome !== line) return
+      outcome = undefined
+      paint($)
+    })
+  } catch (err) {
+    $.ui.log(`stint: checkpoint not journaled: ${String(err)}`, { to: 'debug' })
+  }
+}
+
 export function registerPit(on: On) {
   ceilingPct = undefined
   setAutopitInfo(undefined)
@@ -1165,6 +1206,8 @@ export function registerPit(on: On) {
       try {
         turnRunning = false
         lastTurnAt = await $.clock.now()
+        // The checkpoint trailers of this answer are journaled before an auto-pit can fork: the fork then sees them.
+        if (e.reason === 'answer') await journalCkpt($, e.answer)
         // The ready turn of an auto-pit never re-triggers: neither the idle wait nor the ceiling.
         if (skipNextArm) skipNextArm = false
         else {
@@ -1177,6 +1220,18 @@ export function registerPit(on: On) {
       }
     }
     return result
+  }).catch(($, e, next) => next(e))
+
+  // The rule that teaches the trailer reaches the model as one context block per conversation (first request, again after /clear and /compact),
+  // unless the project's own instructions already hold it.
+  on('prompt.context', async ($, e, next) => {
+    const result = await next(e)
+    try {
+      claudeHasRule = claudeMdHasRule(result.blocks)
+      return { ...result, blocks: withRule(result.blocks, journalPath(await rootNow($), current())) }
+    } catch {
+      return result
+    }
   }).catch(($, e, next) => next(e))
 
   on('config.set', { key: AUTOPIT_KEY }, async ($, e, next) => {
@@ -1244,6 +1299,8 @@ export function registerPit(on: On) {
         flowLine = undefined
         lastPersist = null
         seenNotes.clear()
+        journaled.clear()
+        claudeHasRule = false
         stopWatch()
       }
       await noteTitle(e.session_title)
