@@ -120,7 +120,7 @@ export function fuelOf(rateLimits: readonly SessionRateLimit[]): number | null {
 export type Message = { text: string; rank: 'info' | 'warn' | 'redline' | 'alert' | 'pit'; bad?: boolean }
 const RANK = { info: 0, warn: 1, redline: 2, alert: 3, pit: 4 } as const
 
-export const ceilingMessage = (pct: number) => `auto-pit at ${pct}%`
+export const ceilingMessage = (pct: number) => `will auto-pit at ${pct}%`
 
 // Local HH:MM of an epoch ms.
 export function clockText(ms: number): string {
@@ -129,8 +129,9 @@ export function clockText(ms: number): string {
 }
 
 // The idle timer on the board: alone, or after a zone's text (the zone's text is already about the auto-pit or the pit).
-export const idleText = (at: number, emoji: boolean) => (emoji ? `⏸ auto-pit ${clockText(at)}` : `auto-pit ${clockText(at)}`)
-const idleTail = (at: number, emoji: boolean) => (emoji ? ` · ⏸ ${clockText(at)}` : ` - at ${clockText(at)}`)
+// Future tense: the auto-pit has not happened yet. Two spaces after ⏸: the terminal draws it two cells wide.
+export const idleText = (at: number, emoji: boolean) => (emoji ? `⏸  will auto-pit at ${clockText(at)}` : `will auto-pit at ${clockText(at)}`)
+const idleTail = (at: number, emoji: boolean) => (emoji ? ` · ⏸  idle: ${clockText(at)}` : ` - idle: ${clockText(at)}`)
 
 export type BoardOptions = {
   // the effective auto-pit ceiling shown by the red zone, whole % of the window
@@ -164,7 +165,7 @@ export function cols(s: string): number {
   let n = 0
   for (const ch of s) {
     const cp = ch.codePointAt(0) as number
-    n += cp === 0xfe0f ? 0 : cp >= 0x1f000 || cp === 0x26fd || cp === 0x2705 || cp === 0x26a0 ? 2 : 1
+    n += cp === 0xfe0f ? 0 : cp >= 0x1f000 || cp === 0x23f8 || cp === 0x26fd || cp === 0x2705 || cp === 0x26a0 ? 2 : 1
   }
   return n
 }

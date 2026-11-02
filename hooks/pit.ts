@@ -236,8 +236,8 @@ export function autoLine(mark: AutoMark, path: string): string {
   const d = new Date(mark.at)
   const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`
   const k = Math.round(mark.tokens / 1000)
-  if (mark.kind === 'ceiling') return `⛔ auto-pit (ceiling ${mark.pct ?? Math.round(AUTOPIT_CEILING * 100)}%) at ${hm} · ${k}k → notes ${path}`
-  return `⏸ auto-pit at ${hm} · ${mark.idleMin} min idle · ${k}k → notes ${path}`
+  if (mark.kind === 'ceiling') return `⛔ auto-pitted (ceiling ${mark.pct ?? Math.round(AUTOPIT_CEILING * 100)}%) at ${hm} · ${k}k → notes ${path}`
+  return `⏸  auto-pitted at ${hm} · ${mark.idleMin} min idle · ${k}k → notes ${path}`
 }
 
 // What the ceiling trigger reads after a turn; null = could not be read (that skips).

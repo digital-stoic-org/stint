@@ -69,7 +69,7 @@ test('pickBoard: alert > redline > warn > info; the hard zone speaks as a warn, 
   expect(pickBoard(undefined, 0, 1)).toBeNull()
   expect(pickBoard(undefined, 0, 2)).toEqual({ text: HARD_MESSAGE, rank: 'warn' })
   expect(pickBoard(undefined, 0, 3)).toEqual({ text: ceilingMessage(80), rank: 'redline' })
-  expect(pickBoard(undefined, 0, 3, undefined, { ceilingPct: 75 })?.text).toBe('auto-pit at 75%')
+  expect(pickBoard(undefined, 0, 3, undefined, { ceilingPct: 75 })?.text).toBe('will auto-pit at 75%')
   expect(pickBoard(r('info'), 0, 0)?.text).toBe('info msg')
   // on a tie the zone wins over a stored message
   expect(pickBoard(r('warn'), 0, 2)?.text).toBe(HARD_MESSAGE)
@@ -89,15 +89,15 @@ const FIRE = new Date(2026, 9, 30, 14, 32).getTime()
 test('pickBoard: the idle timer is a dim info alone, appended to a zone text (its rank kept), and gives way to the pit, an alert and a stored info', () => {
   expect(clockText(FIRE)).toBe('14:32')
   const opts = { idleAt: FIRE }
-  expect(pickBoard(undefined, 0, 0, undefined, opts)).toEqual({ text: '⏸ auto-pit 14:32', rank: 'info' })
+  expect(pickBoard(undefined, 0, 0, undefined, opts)).toEqual({ text: '⏸  will auto-pit at 14:32', rank: 'info' })
   // the soft zone has no text of its own: the timer stands alone
-  expect(pickBoard(undefined, 0, 1, undefined, opts)).toEqual({ text: '⏸ auto-pit 14:32', rank: 'info' })
-  expect(pickBoard(undefined, 0, 2, undefined, opts)).toEqual({ text: `${HARD_MESSAGE} · ⏸ 14:32`, rank: 'warn' })
-  expect(pickBoard(undefined, 0, 3, undefined, { ...opts, ceilingPct: 75 })).toEqual({ text: 'auto-pit at 75% · ⏸ 14:32', rank: 'redline' })
+  expect(pickBoard(undefined, 0, 1, undefined, opts)).toEqual({ text: '⏸  will auto-pit at 14:32', rank: 'info' })
+  expect(pickBoard(undefined, 0, 2, undefined, opts)).toEqual({ text: `${HARD_MESSAGE} · ⏸  idle: 14:32`, rank: 'warn' })
+  expect(pickBoard(undefined, 0, 3, undefined, { ...opts, ceilingPct: 75 })).toEqual({ text: 'will auto-pit at 75% · ⏸  idle: 14:32', rank: 'redline' })
   // ascii: no pause mark
-  expect(pickBoard(undefined, 0, 0, undefined, { ...opts, emoji: false })).toEqual({ text: 'auto-pit 14:32', rank: 'info' })
-  expect(pickBoard(undefined, 0, 3, undefined, { ...opts, emoji: false })?.text).toBe('auto-pit at 80% - at 14:32')
-  expect(idleText(FIRE, true)).toBe('⏸ auto-pit 14:32')
+  expect(pickBoard(undefined, 0, 0, undefined, { ...opts, emoji: false })).toEqual({ text: 'will auto-pit at 14:32', rank: 'info' })
+  expect(pickBoard(undefined, 0, 3, undefined, { ...opts, emoji: false })?.text).toBe('will auto-pit at 80% - idle: 14:32')
+  expect(idleText(FIRE, true)).toBe('⏸  will auto-pit at 14:32')
   // the pit, an alert, a stored info keep the slot alone
   expect(pickBoard(undefined, 0, 3, { text: 'saved' }, opts)).toEqual({ text: 'saved', rank: 'pit', bad: false })
   expect(pickBoard({ text: 'spotter', level: 'alert', from: 't' }, 0, 3, undefined, opts)?.text).toBe('spotter')
@@ -121,7 +121,7 @@ const ASCII = { emoji: false }
 test('renderLine: zone emoji, bar, board; no fuel, no stint, no cost in the ambient line', () => {
   expect(renderLine({ reading: R(22), lap: 1, message: null }, FULL)).toBe('🚀 revs 22% ▮▮▯▯▯▯▯▯▯▯ · 📋 —')
   expect(renderLine({ reading: R(48), lap: 1, message: { text: '3 decisions since pit', rank: 'info' } }, FULL)).toBe('🔥 revs 48% ▮▮▮▮▯▯▯▯▯▯ · 📋 3 decisions since pit')
-  expect(renderLine({ reading: R(85), lap: 1, message: { text: ceilingMessage(80), rank: 'redline' } }, FULL)).toBe('🚨 revs 85% ▮▮▮▮▮▮▮▮▯▯ · 📋 auto-pit at 80%')
+  expect(renderLine({ reading: R(85), lap: 1, message: { text: ceilingMessage(80), rank: 'redline' } }, FULL)).toBe('🚨 revs 85% ▮▮▮▮▮▮▮▮▯▯ · 📋 will auto-pit at 80%')
   expect(renderLine({ reading: R(65), lap: 1, message: { text: HARD_MESSAGE, rank: 'warn' } }, FULL)).toBe('🔶 revs 65% ▮▮▮▮▮▮▯▯▯▯ · 📋 box this lap: /pit or --save')
   expect(renderLine({ reading: R(10, [{ kind: 'five_hour', percentUsed: 1 }]), lap: 1, message: null }, FULL)).not.toContain('$')
 })
@@ -180,9 +180,10 @@ test('buildRuns: soft is orange, hard is bold orange, the red zone is fixed bold
 
 test('renderLine: the board cuts the end first, so a timer behind a zone text goes before the alert', () => {
   const message = pickBoard(undefined, 0, 3, undefined, { idleAt: FIRE, ceilingPct: 75 })!
-  expect(buildRuns({ reading: R(85), lap: 1, message }, FULL, 80).map(r => r.text).join('')).toBe('🚨 revs 85% ▮▮▮▮▮▮▮▮▯▯ · 📋 auto-pit at 75% · ⏸ 14:32')
+  expect(buildRuns({ reading: R(85), lap: 1, message }, FULL, 80).map(r => r.text).join('')).toBe('🚨 revs 85% ▮▮▮▮▮▮▮▮▯▯ · 📋 will auto-pit at 75% · ⏸  idle: 14:32')
   const tight = buildRuns({ reading: R(85), lap: 1, message }, FULL, 50).map(r => r.text).join('')
-  expect(tight).toContain('📋 auto-pit at 75% · ')
+  // the zone text stays whole, the timer behind it is cut first
+  expect(tight).toContain('📋 will auto-pit at 75%')
   expect(tight).not.toContain('14:32')
   expect(tight.endsWith('…')).toBe(true)
 })
@@ -216,13 +217,13 @@ test('toastText: one line per zone, with the window size when it is not 200k', (
   expect(toastText(0, R(10), true)).toBeNull()
   expect(toastText(1, R(41), true)).toBe('🔥 revs 41% · auto-pit armed')
   expect(toastText(2, R(61), true)).toBe('revs 61% · box this lap: /pit or --save')
-  expect(toastText(3, R(71), true)).toBe('🚨 revs 71% · auto-pit at 80%')
-  expect(toastText(3, R(66, [], 1_000_000), true, { ceilingPct: 75 })).toBe('🚨 revs 66%/1M · auto-pit at 75%')
+  expect(toastText(3, R(71), true)).toBe('🚨 revs 71% · will auto-pit at 80%')
+  expect(toastText(3, R(66, [], 1_000_000), true, { ceilingPct: 75 })).toBe('🚨 revs 66%/1M · will auto-pit at 75%')
   // auto-pit off: the soft zone keeps its old advice
   expect(toastText(1, R(41), true, { autopit: false })).toBe('🔥 revs 41% · plan your pit')
   expect(toastText(1, R(41), false, { autopit: false })).toBe('revs 41% - plan your pit')
   expect(toastText(1, R(41), false)).toBe('revs 41% - auto-pit armed')
-  expect(toastText(3, R(71), false, { ceilingPct: 75 })).toBe('revs 71% - auto-pit at 75%')
+  expect(toastText(3, R(71), false, { ceilingPct: 75 })).toBe('revs 71% - will auto-pit at 75%')
 })
 
 test('canToast: one slot, redline > zone > positive, a live higher toast is never replaced', () => {
@@ -363,7 +364,7 @@ test('measure: the status line shows revs and an empty board; zones come from ab
   await measure($, 60)
   expect(last(w)).toBe('🔶 revs 60% ▮▮▮▮▮▮▯▯▯▯ ↑1 · 📋 box this lap: /pit or --save')
   await measure($, 70)
-  expect(last(w)).toBe('🚨 revs 70% ▮▮▮▮▮▮▮▯▯▯ ↑10 · 📋 auto-pit at 80%')
+  expect(last(w)).toBe('🚨 revs 70% ▮▮▮▮▮▮▮▯▯▯ ↑10 · 📋 will auto-pit at 80%')
   // the compaction wall is pit's rail: dash never pulls it
   expect(w.usageCalls).toBe(0)
 })
@@ -382,7 +383,7 @@ test('measure: a 1M window shows its size and crosses on the same tokens; a 100k
   expect(last(w)?.startsWith('🔶 revs 60%/1M')).toBe(true)
   await measure($, 70, [], 1_000_000)
   expect(last(w)?.startsWith('🚨 revs 70%/1M')).toBe(true)
-  expect(w.toasts).toEqual(['🔥 revs 8%/1M · auto-pit armed', 'revs 60%/1M · box this lap: /pit or --save', '🚨 revs 70%/1M · auto-pit at 80%'])
+  expect(w.toasts).toEqual(['🔥 revs 8%/1M · auto-pit armed', 'revs 60%/1M · box this lap: /pit or --save', '🚨 revs 70%/1M · will auto-pit at 80%'])
 
   await clear($)
   await measure($, 39, [], 100_000)
@@ -411,7 +412,7 @@ test('toasts: soft 5 s, hard 10 s, red 10 s, once per upward crossing, none on t
   await measure($, 66)
   expect(w.toasts).toHaveLength(2)
   await measure($, 71)
-  expect(w.toasts[2]).toBe('🚨 revs 71% · auto-pit at 80%')
+  expect(w.toasts[2]).toBe('🚨 revs 71% · will auto-pit at 80%')
   expect(w.toastMs).toEqual([5000, 10_000, 10_000])
   await measure($, 90)
   expect(w.toasts).toHaveLength(3)
@@ -434,7 +435,7 @@ test('toasts: a jump across zones announces the one reached', async ($, on) => {
   await fresh($)
   await measure($, 10)
   await measure($, 75)
-  expect(w.toasts).toEqual(['🚨 revs 75% · auto-pit at 80%'])
+  expect(w.toasts).toEqual(['🚨 revs 75% · will auto-pit at 80%'])
 })
 
 test('toasts: one slot, redline > zone > positive, never stacked', async ($, on) => {
@@ -491,7 +492,7 @@ test('board: a producer writes the slot, the line shows it; expiry empties it on
 
   w.board = { text: 'pit now', level: 'info', from: 'test' }
   await measure($, 90)
-  expect(last(w)?.endsWith('📋 auto-pit at 80%')).toBe(true)
+  expect(last(w)?.endsWith('📋 will auto-pit at 80%')).toBe(true)
   await measure($, 65)
   expect(last(w)?.endsWith('📋 box this lap: /pit or --save')).toBe(true)
   await measure($, 90)
@@ -581,7 +582,7 @@ test('dash ascii: the line and the toasts are ASCII only', { options: { dash: 'a
   await measure($, 45)
   await measure($, 65)
   await measure($, 75)
-  expect(w.toasts).toEqual(['revs 45% - auto-pit armed', 'revs 65% - box this lap: /pit or --save', 'revs 75% - auto-pit at 80%'])
+  expect(w.toasts).toEqual(['revs 45% - auto-pit armed', 'revs 65% - box this lap: /pit or --save', 'revs 75% - will auto-pit at 80%'])
   expect(/^[\x20-\x7e]*$/.test(last(w) ?? '')).toBe(true)
 })
 
@@ -887,7 +888,7 @@ function autopitRow(on: On, mode: { value: string }) {
 }
 const setAutopit = ($: Engine, value: string) => $.config.set({ key: 'stint.autopit', value, previous: 'on', provider: { plugin: 'stint', tier: 'plugin' }, origin: { kind: 'composer' } } as never)
 
-test('idle timer: hidden for 15 min after the turn, then "⏸ auto-pit HH:MM" (the fire time) until it fires; a prompt, /clear and the fire clear it', async ($, on) => {
+test('idle timer: hidden for 15 min after the turn, then "⏸  will auto-pit at HH:MM" (the fire time) until it fires; a prompt, /clear and the fire clear it', async ($, on) => {
   const w = world(on)
   await fresh($)
   await measure($, 45)
@@ -895,9 +896,9 @@ test('idle timer: hidden for 15 min after the turn, then "⏸ auto-pit HH:MM" (t
   await w.clock.advance(SHOW_MS - 10)
   expect(last(w)).toBe('🔥 revs 45% ▮▮▮▮▯▯▯▯▯▯ · 📋 —')
   await w.clock.advance(11)
-  expect(last(w)).toBe(`🔥 revs 45% ▮▮▮▮▯▯▯▯▯▯ · 📋 ⏸ auto-pit ${clockText(START + IDLE_MS)}`)
+  expect(last(w)).toBe(`🔥 revs 45% ▮▮▮▮▯▯▯▯▯▯ · 📋 ⏸  will auto-pit at ${clockText(START + IDLE_MS)}`)
   await w.clock.advance(IDLE_MS - SHOW_MS - 100)
-  expect(last(w)).toContain('⏸ auto-pit')
+  expect(last(w)).toContain('⏸  will auto-pit at')
   // a prompt ends the idle period: the timer goes at once
   await prompt($)
   expect(last(w)).toBe('🔥 revs 45% ▮▮▮▮▯▯▯▯▯▯ · 📋 —')
@@ -905,7 +906,7 @@ test('idle timer: hidden for 15 min after the turn, then "⏸ auto-pit HH:MM" (t
   // the next turn end starts a new period, counted again from 0
   await turnDone($)
   await w.clock.advance(SHOW_MS + 1)
-  expect(last(w)).toContain('⏸ auto-pit')
+  expect(last(w)).toContain('⏸  will auto-pit at')
   await clear($)
   expect(last(w)).toBeUndefined()
   await measure($, 45)
@@ -918,7 +919,7 @@ test('idle timer: gone when it fires, even when the pit is skipped', async ($, o
   await measure($, 45)
   await turnDone($)
   await w.clock.advance(SHOW_MS + 1)
-  expect(last(w)).toContain('⏸ auto-pit')
+  expect(last(w)).toContain('⏸  will auto-pit at')
   // the usage the pit reads has no token figure: it skips, and the timer does not linger
   await w.clock.advance(IDLE_MS - SHOW_MS)
   expect(last(w)).toBe('🔥 revs 45% ▮▮▮▮▯▯▯▯▯▯ · 📋 —')
@@ -932,7 +933,7 @@ test('idle timer: only when the context is 80k or more', async ($, on) => {
   await w.clock.advance(SHOW_MS + 1)
   expect(last(w)).toBe('🚀 revs 39% ▮▮▮▯▯▯▯▯▯▯ · 📋 —')
   await measure($, 40)
-  expect(last(w)).toContain('⏸ auto-pit')
+  expect(last(w)).toContain('⏸  will auto-pit at')
 })
 
 test('idle timer: behind a zone text, the zone text first and its colour; a pit message or an alert keeps the slot alone', async ($, on) => {
@@ -942,16 +943,16 @@ test('idle timer: behind a zone text, the zone text first and its colour; a pit 
   await turnDone($)
   await w.clock.advance(SHOW_MS + 1)
   const at = clockText(START + IDLE_MS)
-  expect(last(w)).toBe(`🔶 revs 62% ▮▮▮▮▮▮▯▯▯▯ · 📋 box this lap: /pit or --save · ⏸ ${at}`)
+  expect(last(w)).toBe(`🔶 revs 62% ▮▮▮▮▮▮▯▯▯▯ · 📋 box this lap: /pit or --save · ⏸  idle: ${at}`)
   const ui = await mountBand($)
   const runs = await ui.findAll({ type: 'Text' })
-  expect(runs.at(-1)?.text).toBe(`box this lap: /pit or --save · ⏸ ${at}`)
+  expect(runs.at(-1)?.text).toBe(`box this lap: /pit or --save · ⏸  idle: ${at}`)
   await ui.unmount()
 
   // the ceiling pit published 75% (the wall at 167k caps it): the red zone starts at 65%
   await w.clock.advance(5)
   await measure($, 66)
-  expect(last(w)?.endsWith(`📋 auto-pit at 75% · ⏸ ${at}`) || (await bandOf($))?.endsWith(`auto-pit at 75% · ⏸ ${at}`)).toBe(true)
+  expect(last(w)?.endsWith(`📋 will auto-pit at 75% · ⏸  idle: ${at}`) || (await bandOf($))?.endsWith(`will auto-pit at 75% · ⏸  idle: ${at}`)).toBe(true)
 
   w.board = { text: 'spotter: stop', level: 'alert', from: 'test' }
   await measure($, 67)
@@ -975,8 +976,8 @@ test('auto-pit info: the ceiling pit reads (wall 167k on a 200k window) moves th
   expect(last(w)?.startsWith('🔶 revs 64%')).toBe(true)
   await measure($, 66)
   expect(last(w)?.startsWith('🚨 revs 66%')).toBe(true)
-  expect(w.toasts.at(-1)).toBe('🚨 revs 66% · auto-pit at 75%')
-  expect(last(w)?.endsWith('📋 auto-pit at 75%')).toBe(true)
+  expect(w.toasts.at(-1)).toBe('🚨 revs 66% · will auto-pit at 75%')
+  expect(last(w)?.endsWith('📋 will auto-pit at 75%')).toBe(true)
 })
 
 test('auto-pit off (the row): no red zone, no timer, the soft toast keeps "plan your pit", the hard zone stays the last', async ($, on) => {
@@ -1002,14 +1003,14 @@ test('auto-pit setting followed live: off removes the timer and the red zone at 
   await measure($, 72)
   await turnDone($)
   await w.clock.advance(SHOW_MS + 5)
-  expect(last(w)).toMatch(/^🚨 revs 72%.*auto-pit at 75% · ⏸ \d\d:\d\d$/)
+  expect(last(w)).toMatch(/^🚨 revs 72%.*will auto-pit at 75% · ⏸  idle: \d\d:\d\d$/)
   mode.value = 'off'
   await setAutopit($, 'off')
   expect(last(w)).toBe('🔶 revs 72% ▮▮▮▮▮▮▮▯▯▯ · 📋 box this lap: /pit or --save')
   mode.value = 'on'
   await setAutopit($, 'on')
   // 15 min and a little already spent: the timer is back with the original fire time
-  expect(last(w)).toBe(`🚨 revs 72% ▮▮▮▮▮▮▮▯▯▯ · 📋 auto-pit at 75% · ⏸ ${clockText(START + IDLE_MS)}`)
+  expect(last(w)).toBe(`🚨 revs 72% ▮▮▮▮▮▮▮▯▯▯ · 📋 will auto-pit at 75% · ⏸  idle: ${clockText(START + IDLE_MS)}`)
 })
 
 test('idle timer in ascii: no pause mark', { options: { dash: 'ascii' } }, async ($, on) => {
@@ -1018,7 +1019,7 @@ test('idle timer in ascii: no pause mark', { options: { dash: 'ascii' } }, async
   await measure($, 45)
   await turnDone($)
   await w.clock.advance(SHOW_MS + 1)
-  expect(last(w)).toBe(`revs 45% ####...... | board auto-pit ${clockText(START + IDLE_MS)}`)
+  expect(last(w)).toBe(`revs 45% ####...... | board will auto-pit at ${clockText(START + IDLE_MS)}`)
   expect(/^[\x20-\x7e]*$/.test(last(w) ?? '')).toBe(true)
 })
 
@@ -1192,7 +1193,7 @@ test('cache warning in ascii: ASCII only on the status line', { options: { dash:
   await startAt($)
   await measure($, 70)
   await mainTurn($)
-  expect(last(w)).toBe('! cache 5min | revs 70% #######... | board auto-pit at 80%')
+  expect(last(w)).toBe('! cache 5min | revs 70% #######... | board will auto-pit at 80%')
   expect(/^[\x20-\x7e]*$/.test(last(w) ?? '')).toBe(true)
 })
 

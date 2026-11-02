@@ -1170,7 +1170,7 @@ test('autopitSkip: every guard names its reason; all clear = null; an unreadable
 test('autoLine and injectText: the auto variant carries the line and the wait rules, the manual text is unchanged', () => {
   const at = new Date(2026, 9, 29, 14, 5).getTime()
   const line = autoLine({ kind: 'idle', at, idleMin: 50, tokens: 91_400 }, '.stint/proj-notes.md')
-  expect(line).toBe('⏸ auto-pit at 14:05 · 50 min idle · 91k → notes .stint/proj-notes.md')
+  expect(line).toBe('⏸  auto-pitted at 14:05 · 50 min idle · 91k → notes .stint/proj-notes.md')
   // a mark stored before `kind` existed reads as idle
   expect(autoLine({ at, idleMin: 50, tokens: 91_400 } as never, '.stint/proj-notes.md')).toBe(line)
   expect(injectText('notes\n')).toBe(`notes\n\n${UNPACK_RULES}`)
@@ -1194,9 +1194,9 @@ After my go, read the \`read_first\` files before acting.`)
 test('autoLine and autoUnpackRules: the ceiling variant, and the overwrite warning after the line', () => {
   const at = new Date(2026, 9, 29, 9, 7).getTime()
   const line = autoLine({ kind: 'ceiling', at, tokens: 141_400 }, '.stint/proj-notes.md')
-  expect(line).toBe('⛔ auto-pit (ceiling 80%) at 09:07 · 141k → notes .stint/proj-notes.md')
+  expect(line).toBe('⛔ auto-pitted (ceiling 80%) at 09:07 · 141k → notes .stint/proj-notes.md')
   // the wall can cap the ceiling under the nominal one: the line says the real one
-  expect(autoLine({ kind: 'ceiling', at, tokens: 150_400, pct: 75 }, '.stint/proj-notes.md')).toBe('⛔ auto-pit (ceiling 75%) at 09:07 · 150k → notes .stint/proj-notes.md')
+  expect(autoLine({ kind: 'ceiling', at, tokens: 150_400, pct: 75 }, '.stint/proj-notes.md')).toBe('⛔ auto-pitted (ceiling 75%) at 09:07 · 150k → notes .stint/proj-notes.md')
   const rules = autoUnpackRules(line, 'ceiling')
   expect(rules).toContain(`exactly this, with nothing before it:\n${line}\nThen summarize`)
   expect(rules).toContain('saved and cleared automatically because the context was nearly full')
@@ -1469,7 +1469,7 @@ test('ceiling: fires right after a turn at 80% and not under it; the fresh sessi
   expect(w.clears).toBe(1)
   await clear($)
   const line = autoLine({ kind: 'ceiling', at: 1_000_000, tokens: 72_000, pct: 80 }, '.stint/proj-notes.md')
-  expect(line).toMatch(/^⛔ auto-pit \(ceiling 80%\) at \d\d:\d\d · 72k → notes \.stint\/proj-notes\.md$/)
+  expect(line).toMatch(/^⛔ auto-pitted \(ceiling 80%\) at \d\d:\d\d · 72k → notes \.stint\/proj-notes\.md$/)
   expect(w.submits).toEqual([`${notes.trimEnd()}\n\n${autoUnpackRules(line, 'ceiling')}`])
 })
 
