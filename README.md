@@ -99,6 +99,38 @@ Option (`/config`, row `stint · Checkpoint`, or `pluginConfigs.stint.options.ch
 | `on` (default) | The rule, the journal, the marker and the pit hint. |
 | `off` | None of them: no rule sent, no journal write, nothing hidden, no pit hint. A trailer the model still writes (from your own instructions) shows as plain text. The rule already sent stays in the current conversation until `/clear` or `/compact`. |
 
+## Crew
+
+On by default. stint sends the model a short, fixed set of working principles that tell it how to route work by what must stay in its context: the context is a budget re-read every turn until the next pit; short answers stay inline while the cache is warm; reading-heavy or fan-out work goes to a fresh sub-agent, which starts cold; a side task that needs the session's decisions goes to a fork, which starts warm from the session's cache; the model tier follows the work and is set in every delegation, the session stays on the top tier and changes model only at a pit. Two more lines say what a brief and a report hold. It arrives as one context block (`stintCrew`) at the start of each conversation, and again after `/clear` and `/compact`, like the checkpoint rule. Sub-agents started with the Agent tool read it too, so every line is written to hold for a delegate as well. The text never changes inside a conversation and names no model. It is left out when your own instructions (`CLAUDE.md`) already hold its heading `## Crew (stint)`, for instance when you keep your own version of it there.
+
+The text sent, with its default figures:
+
+```
+## Crew (stint)
+- Context is the budget: what you read inline stays, re-read every turn, until the next pit. Route by what must stay in your context, not by price per call.
+- Inline: short answers while the cache is warm; re-reading cached context costs little.
+- Fresh sub-agent: self-contained, reading-heavy work (> ~7k tokens to read) or fan-out. It starts cold (~11k tokens here, none of your cache) and returns only its conclusion. Few workers beat many: each pays its own cold start.
+- Fork: a side task that needs your decisions and state (a parallel variant, a review in your frame); it starts warm from your cache; not when your context is already heavy or the task needs another model.
+- Model by the work, set explicitly in every delegation: smallest tier for mechanical reading or extraction, middle tier for routine judgment, top tier for framing, audits, irreversible steps. Keep the session on the top tier; spend cheaper tiers on fresh contexts.
+- Switch the session's model only at a pit (the cache is per model). A closed phase or a pause longer than the cache life: pit rather than carry or delegate the rest.
+- When you delegate: goal, absolute paths, files it alone writes, closed reading list, stop conditions, deliverable on disk.
+- When you report, back each fact with its proof command; re-check a report you receive on disk before relaying it.
+```
+
+The two figures in the `Fresh sub-agent` line come from your own setup once stint has measured it:
+
+- **Cold start** (`~11k` by default, a general-purpose sub-agent's first request in a folder with no `CLAUDE.md`): the size of a sub-agent's first request, as the API reports it (uncached, cache-written and cache-read input together). stint reads it when a sub-agent makes its first request, once per sub-agent, and keeps the last 5 per project folder in its plugin store (numbers and times only, at most 20 folders). The text quotes their median, in thousands of tokens. A folder with no figure of its own takes the last 5 across all folders; with none at all, the default stays. The figure differs per project because a sub-agent's prompt carries the project's `CLAUDE.md`.
+- **Delegate threshold** (`> ~7k` by default): an estimate, 0.65 times the cold start. Reading inline costs in proportion to the tokens read, delegating costs a cold start, so the point where delegating pays moves with the cold start.
+
+The figures are filled in when a conversation starts (first request, `/clear`, `/compact`, a pit) and stay fixed for that conversation. A figure measured mid-conversation shows from the next one.
+
+Option (`/config`, row `stint · Crew`, or `pluginConfigs.stint.options.crew`):
+
+| `crew` | does |
+|---|---|
+| `on` (default) | The block is sent. |
+| `off` | No block and no measuring. A block already sent stays in the current conversation until `/clear` or `/compact`. |
+
 ## Notes file
 
 `<project root>/.stint/<stream>-notes.md` (the folder the session started in, not the shell's current folder; `/clear` and `/rejoin` use the same root). Before each save the previous notes are copied to `.stint/archive/<stream>-notes-<YYYYMMDD-HHMM>.md`. stint never deletes them: Claude Code gives plugins no way to delete a file, so the folder grows until you clean it (`rm .stint/archive/*`). A saved note that /clear cannot re-inject shows `notes not loaded (<reason>): /rejoin <stream>` on the board. At most 8,000 characters. Header: `stream`, `saved`, `status`, `previous_session`, `goal`, `stint`, `journal`, `journal_cursor`. `stint` is the number of the stint the notes hand over to: each successful `/pit` writes the previous value plus one, `/pit --save` keeps it, and a file without the field counts as 1. `journal` is the path of the stream's journal and `journal_cursor` the last entry the notes took in (`c00` when none; a file without it counts as `c00`).

@@ -48,6 +48,7 @@ import {
   streamsFromNames,
 } from '../hooks/pit.ts'
 import { CHECKPOINT_KEY, RULE_BLOCK, RULE_TEXT, journalRule } from '../hooks/checkpoint.ts'
+import { CREW_BLOCK, CREW_KEY, CREW_STORE, CREW_TEXT, addSample, crewText } from '../hooks/crew.ts'
 import { PHASE_FOLLOW_TURNS, PHASE_HINT, PHASE_HINT_FLOOR, phaseHintText } from '../hooks/pit.ts'
 
 // ---------- pure functions ----------
@@ -2044,7 +2045,7 @@ test('prompt.context: a stintCheckpoint block with the rule and the journal rule
   await fresh($)
   await title($, 'proj')
   const r = await ctx($, 'Be brief.')
-  expect(r.blocks.map(b => b.name)).toEqual(['claudeMd', 'userEmail', 'currentDate', RULE_BLOCK])
+  expect(r.blocks.map(b => b.name)).toEqual(['claudeMd', 'userEmail', 'currentDate', RULE_BLOCK, CREW_BLOCK])
   const block = r.blocks[3]!.text
   expect(block).toContain(RULE_TEXT)
   expect(block).toContain(journalRule(JOURNAL))
@@ -2055,7 +2056,7 @@ test('prompt.context: no claudeMd block counts as no rule, the block is added', 
   baseContext(on)
   await fresh($)
   const r = await ctx($)
-  expect(r.blocks.map(b => b.name)).toEqual(['userEmail', 'currentDate', RULE_BLOCK])
+  expect(r.blocks.map(b => b.name)).toEqual(['userEmail', 'currentDate', RULE_BLOCK, CREW_BLOCK])
 })
 
 test('prompt.context: skipped when the claudeMd text already holds the trailer opener', async ($, on) => {
@@ -2063,7 +2064,7 @@ test('prompt.context: skipped when the claudeMd text already holds the trailer o
   baseContext(on)
   await fresh($)
   const r = await ctx($, 'rules ... end with one comment starting `<!-- ckpt` ...')
-  expect(r.blocks.map(b => b.name)).toEqual(['claudeMd', 'userEmail', 'currentDate'])
+  expect(r.blocks.map(b => b.name)).toEqual(['claudeMd', 'userEmail', 'currentDate', CREW_BLOCK])
 })
 
 test('prompt.context: the opener inside another block than claudeMd does not count, and the block is never added twice', async ($, on) => {
@@ -2071,7 +2072,7 @@ test('prompt.context: the opener inside another block than claudeMd does not cou
   baseContext(on)
   await fresh($)
   const r = await $.prompt.context({ blocks: [{ name: 'claudeMd', text: 'x' }, { name: 'attachedProject', text: '<!-- ckpt' }, { name: RULE_BLOCK, text: 'already' }] } as never)
-  expect(r.blocks.map(b => b.name)).toEqual(['claudeMd', 'attachedProject', RULE_BLOCK])
+  expect(r.blocks.map(b => b.name)).toEqual(['claudeMd', 'attachedProject', RULE_BLOCK, CREW_BLOCK])
   expect(r.blocks[2]!.text).toBe('already')
   const r2 = await ctx($, 'x')
   expect(r2.blocks.filter(b => b.name === RULE_BLOCK)).toHaveLength(1)
@@ -2148,17 +2149,17 @@ test('checkpoint off: an answer with a trailer writes no journal, and on again i
   expect(w.files.get(JOURNAL)).toContain('### c01 ')
 })
 
-test('checkpoint off: prompt.context passes the engine\'s blocks through, no stintCheckpoint block', async ($, on) => {
+test('checkpoint off: prompt.context adds no stintCheckpoint block; the crew block still goes', async ($, on) => {
   world(on, OK())
   baseContext(on)
   checkpointRow(on)
   await fresh($)
   await setCheckpointRow($, 'off')
   const r = await ctx($, 'Be brief.')
-  expect(r.blocks.map(b => b.name)).toEqual(['claudeMd', 'userEmail', 'currentDate'])
+  expect(r.blocks.map(b => b.name)).toEqual(['claudeMd', 'userEmail', 'currentDate', CREW_BLOCK])
   await setCheckpointRow($, 'on')
   const r2 = await ctx($, 'Be brief.')
-  expect(r2.blocks.map(b => b.name)).toEqual(['claudeMd', 'userEmail', 'currentDate', RULE_BLOCK])
+  expect(r2.blocks.map(b => b.name)).toEqual(['claudeMd', 'userEmail', 'currentDate', RULE_BLOCK, CREW_BLOCK])
 })
 
 test('checkpoint off: the notes of a stream journaled earlier get no rule after them', async ($, on) => {
@@ -2541,4 +2542,159 @@ test('phase trace (debug off): nothing traced', async ($, on) => {
   await answer($, PHASE)
   await pit($, 'proj --save')
   expect(w.store.has('stint:trace')).toBe(false)
+})
+
+// ---------- crew block (0.5.0) ----------
+
+const crewRow = (on: On) => on('config.set', { key: CREW_KEY }, (_$, e) => ({ value: e.value }))
+const setCrewRow = ($: Engine, value: string) =>
+  $.config.set({ key: CREW_KEY, value, previous: 'on', provider: { plugin: 'stint', tier: 'plugin' }, origin: { kind: 'composer' } } as never)
+
+test('crew: on by default, one stintCrew block with the fixed text, after the checkpoint rule', async ($, on) => {
+  world(on, OK())
+  baseContext(on)
+  await fresh($)
+  const r = await ctx($, 'Be brief.')
+  const crew = r.blocks.filter(b => b.name === CREW_BLOCK)
+  expect(crew).toEqual([{ name: CREW_BLOCK, text: CREW_TEXT }])
+  expect(r.blocks.at(-1)?.name).toBe(CREW_BLOCK)
+})
+
+test('crew: skipped when the claudeMd input holds the heading; the heading in another block, or the injected block itself, does not count; never twice', async ($, on) => {
+  world(on, OK())
+  baseContext(on)
+  await fresh($)
+  const own = await ctx($, `my rules\n## Crew (stint)\n- my own wording`)
+  expect(own.blocks.map(b => b.name)).toEqual(['claudeMd', 'userEmail', 'currentDate', RULE_BLOCK])
+  const other = await $.prompt.context({ blocks: [{ name: 'claudeMd', text: 'x' }, { name: 'attachedProject', text: '## Crew (stint)' }] } as never)
+  expect(other.blocks.map(b => b.name)).toEqual(['claudeMd', 'attachedProject', RULE_BLOCK, CREW_BLOCK])
+  const again = await $.prompt.context({ blocks: [{ name: 'claudeMd', text: 'x' }, { name: CREW_BLOCK, text: 'already' }] } as never)
+  expect(again.blocks.filter(b => b.name === CREW_BLOCK)).toEqual([{ name: CREW_BLOCK, text: 'already' }])
+})
+
+test('crew off: no crew block, the checkpoint rule still goes; on again it is back', async ($, on) => {
+  world(on, OK())
+  baseContext(on)
+  crewRow(on)
+  await fresh($)
+  await setCrewRow($, 'off')
+  const r = await ctx($, 'Be brief.')
+  expect(r.blocks.map(b => b.name)).toEqual(['claudeMd', 'userEmail', 'currentDate', RULE_BLOCK])
+  await setCrewRow($, 'on')
+  const r2 = await ctx($, 'Be brief.')
+  expect(r2.blocks.map(b => b.name)).toEqual(['claudeMd', 'userEmail', 'currentDate', RULE_BLOCK, CREW_BLOCK])
+})
+
+test('crew off and checkpoint off: the engine\'s answer passes through untouched', async ($, on) => {
+  world(on, OK())
+  baseContext(on)
+  crewRow(on)
+  checkpointRow(on)
+  await fresh($)
+  await setCrewRow($, 'off')
+  await setCheckpointRow($, 'off')
+  const r = await ctx($, 'Be brief.')
+  expect(r.blocks).toEqual([{ name: 'claudeMd', text: 'Be brief.' }, { name: 'userEmail', text: 'a@b.c' }, { name: 'currentDate', text: '2026-11-01' }])
+})
+
+test('crew: the option read at load counts (crew: off in the plugin options)', { options: { crew: 'off' } }, async ($, on) => {
+  world(on, OK())
+  baseContext(on)
+  await fresh($)
+  const r = await ctx($, 'Be brief.')
+  expect(r.blocks.map(b => b.name)).not.toContain(CREW_BLOCK)
+})
+
+test('crew: the same text in every conversation of the session (first request, after /clear)', async ($, on) => {
+  world(on, OK())
+  baseContext(on)
+  await fresh($)
+  const a = (await ctx($, 'x')).blocks.find(b => b.name === CREW_BLOCK)
+  await clear($)
+  const b = (await ctx($, 'x')).blocks.find(b => b.name === CREW_BLOCK)
+  expect(a).toEqual(b)
+})
+
+// ---------- crew figures (0.5.1) ----------
+
+const USAGE = (prompt: number) => ({ input_tokens: 2, output_tokens: 10, cache_creation_input_tokens: prompt - 1002, cache_read_input_tokens: 1000, model: 'm' })
+// The engine beneath: the response of a step, with its usage.
+const stepWorld = (on: On) =>
+  on('turn.step', async function* (_$, e) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: (e as never as { usageIn?: unknown }).usageIn ?? null } as never
+  })
+async function step($: Engine, index: number, agentId: string | undefined, prompt: number | null) {
+  const s = $.turn.step({ turnId: 't', index, model: 'm', ...(agentId ? { agentId } : {}), usageIn: prompt === null ? null : USAGE(prompt) } as never)
+  // read to the end; the generator's return value is the step's result
+  let x = await s.next()
+  while (!x.done) x = await s.next()
+  return x.value
+}
+const flush = () => new Promise(r => setTimeout(r, 20))
+
+test('crew sample: a sub-agent\'s first step is stored as its cold start, under the root, numbers only; the result passes through', async ($, on) => {
+  const w = world(on, OK())
+  stepWorld(on)
+  await fresh($)
+  const r = await step($, 0, 'a1', 24_545)
+  expect(r).toMatchObject({ index: 0, usage: USAGE(24_545) })
+  await flush()
+  expect(w.store.get(CREW_STORE)).toEqual(addSample(undefined, CWD, 24_545, 1_000_000))
+})
+
+test('crew sample: the main loop, later steps, a second turn of the same sub-agent, a step with no usage: no sample', async ($, on) => {
+  const w = world(on, OK())
+  stepWorld(on)
+  await fresh($)
+  await step($, 0, undefined, 30_000)
+  await step($, 1, 'a1', 40_000)
+  await step($, 0, 'a2', null)
+  await step($, 0, 'a3', 20_000)
+  await step($, 0, 'a3', 60_000)
+  await flush()
+  expect(w.store.get(CREW_STORE)).toEqual(addSample(undefined, CWD, 20_000, 1_000_000))
+})
+
+test('crew sample: parallel sub-agents starting together all land (writes serialized)', async ($, on) => {
+  const w = world(on, OK())
+  stepWorld(on)
+  await fresh($)
+  await Promise.all([step($, 0, 'p1', 21_000), step($, 0, 'p2', 22_000), step($, 0, 'p3', 23_000)])
+  await flush()
+  const st = w.store.get(CREW_STORE) as { roots: { samples: { t: number }[] }[] }
+  expect(st.roots[0]!.samples.map(s => s.t).sort()).toEqual([21_000, 22_000, 23_000])
+})
+
+test('crew sample: crew off takes no sample', async ($, on) => {
+  const w = world(on, OK())
+  stepWorld(on)
+  crewRow(on)
+  await fresh($)
+  await setCrewRow($, 'off')
+  await step($, 0, 'a1', 24_545)
+  await flush()
+  expect(w.store.has(CREW_STORE)).toBe(false)
+})
+
+test('crew figures: a conversation starting after samples gets the filled text; before any, the defaults; another root falls back to them', async ($, on) => {
+  const w = world(on, OK())
+  stepWorld(on)
+  baseContext(on)
+  await fresh($)
+  expect((await ctx($, 'x')).blocks.find(b => b.name === CREW_BLOCK)?.text).toBe(CREW_TEXT)
+  await step($, 0, 'a1', 31_000)
+  await flush()
+  await clear($)
+  const filled = crewText({ coldK: 31, delegateK: 20 })
+  expect((await ctx($, 'x')).blocks.find(b => b.name === CREW_BLOCK)?.text).toBe(filled)
+  w.root = '/other'
+  expect((await ctx($, 'x')).blocks.find(b => b.name === CREW_BLOCK)?.text).toBe(filled)
+})
+
+test('crew figures: an unreadable store gives the defaults, the block still goes', async ($, on) => {
+  const w = world(on, OK())
+  baseContext(on)
+  await fresh($)
+  w.store.set(CREW_STORE, { roots: 'broken' })
+  expect((await ctx($, 'x')).blocks.find(b => b.name === CREW_BLOCK)?.text).toBe(CREW_TEXT)
 })

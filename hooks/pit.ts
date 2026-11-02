@@ -3,6 +3,7 @@ import type { EngineInterface, On } from 'claude-code'
 import { pitDone, pitStart, refresh as refreshDash, setLap, zoneOf } from './dash.ts'
 import { ROUTE, RULE_TEXT, captureCkpt, checkpointOn, claudeMdHasRule, hasPhase, journalPath, journalRule, parseJournal, parseTrailer, withRule } from './checkpoint.ts'
 import type { Entry } from './checkpoint.ts'
+import { CREW_STORE, addSample, crewOn, crewText, numbersOf, promptTokens, withCrew } from './crew.ts'
 import { debugOn, sidNow, startWatch, stopWatch, trace, writeReport } from './debug.ts'
 import { AUTOPIT_CEILING, AUTOPIT_MIN_TOKENS, getAutopitInfo, getIdleFire, setAutopitInfo, setIdleFire, setPitBoard, setPitLine, writeStatus } from './status.ts'
 import type { AutopitInfo } from './status.ts'
@@ -1393,6 +1394,32 @@ async function journalCkpt($: EngineInterface, answer: string) {
   }
 }
 
+// ---------- crew figures (0.5.1) ----------
+
+// Sub-agents already sampled in this process.
+const sampledAgents = new Set<string>()
+// Store writes are serialized: parallel sub-agents start together.
+let crewWrites: Promise<unknown> = Promise.resolve()
+
+function recordColdStart($: EngineInterface, tokens: number) {
+  crewWrites = crewWrites
+    .then(async () => {
+      const root = await rootNow($)
+      await $.store.set(CREW_STORE, addSample(await $.store.get(CREW_STORE), root, tokens, await $.clock.now()))
+    })
+    .catch(err => $.ui.log(`stint: crew sample not stored: ${String(err)}`, { to: 'debug' }))
+  return crewWrites
+}
+
+// The crew text for a conversation starting now: this root's measured figures, else any root's, else the defaults.
+async function crewTextNow($: EngineInterface): Promise<string> {
+  try {
+    return crewText(numbersOf(await $.store.get(CREW_STORE), await rootNow($)))
+  } catch {
+    return crewText()
+  }
+}
+
 // ---------- phase hint ----------
 
 // The fill of the context as dash shows it (% of the model window), the tokens behind it, and the auto-pit ceiling this read gives (null = auto-pit off). null = no figure.
@@ -1491,17 +1518,35 @@ export function registerPit(on: On) {
   }).catch(($, e, next) => next(e))
 
   // The rule that teaches the trailer reaches the model as one context block per conversation (first request, again after /clear and /compact),
-  // unless the project's own instructions already hold it.
+  // unless the project's own instructions already hold it. The crew block (crew.ts) rides the same hook, after it, with its own setting and skip:
+  // the host takes one unmatched prompt.context hook per plugin.
   on('prompt.context', async ($, e, next) => {
     const result = await next(e)
-    if (!checkpointOn()) return result
-    try {
-      claudeHasRule = claudeMdHasRule(result.blocks)
-      return { ...result, blocks: withRule(result.blocks, journalPath(await rootNow($), current())) }
-    } catch {
-      return result
+    let blocks = result.blocks
+    if (checkpointOn()) {
+      try {
+        claudeHasRule = claudeMdHasRule(blocks)
+        blocks = withRule(blocks, journalPath(await rootNow($), current()))
+      } catch {
+        // no rule this time; the crew block still goes
+      }
     }
+    if (crewOn()) blocks = withCrew(blocks, await crewTextNow($))
+    return blocks === result.blocks ? result : { ...result, blocks }
   }).catch(($, e, next) => next(e))
+
+  // The crew block's figures: a sub-agent's first request is its cold start. Taken once per sub-agent (a resumed one carries its history), numbers only.
+  // stint holds no other turn.step hook. The stream passes through untouched; the sample is stored after it, off the stream.
+  on('turn.step', async function* ($, e, next) {
+    const r = yield* next(e)
+    if (crewOn() && e.agentId !== undefined && r.index === 0 && r.usage && !sampledAgents.has(e.agentId)) {
+      sampledAgents.add(e.agentId)
+      void recordColdStart($, promptTokens(r.usage))
+    }
+    return r
+  }).catch(async function* ($, e, next) {
+    return yield* next(e)
+  })
 
   on('config.set', { key: AUTOPIT_KEY }, async ($, e, next) => {
     const result = await next(e)
