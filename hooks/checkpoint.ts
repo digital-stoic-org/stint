@@ -161,27 +161,39 @@ export function withRule<B extends CtxBlock>(blocks: readonly B[], path: string)
 
 export type Item = { iso: string; sid: string; trailer: string }
 
-// $.fs has no append: stat, read, stat again (a changed size = another writer: retry once), then write old + new. Null = not written.
+export const APPEND_TRIES = 3
+
+// What says the file changed under us: size and mtime (absent file = its own stamp).
+const stampOf = (s: { size: number; mtimeMs: number } | null) => (s === null ? 'none' : `${s.size}:${s.mtimeMs}`)
+
+// $.fs has no append, so a write replaces the whole file and a second session writing the same journal can erase our entries (or reuse our ids). Narrowed, not removed:
+//   stat, read, stat (changed = another writer, start over) -> build the entries from THIS read -> stat again right before the write (changed = start over, ids recomputed)
+//   -> write -> read back and check every entry we added is there; a later writer that erased them makes us start over on the fresh content.
+// At most APPEND_TRIES tries. The window left is the few ms between the last stat and the write; the read-back catches a write that lands after ours.
+// Null = not written (or not proved written); a failed read-back after a write that did land can leave a duplicate on the retry. Never throws.
 export async function appendEntries($: EngineInterface, path: string, items: Item[]): Promise<string[] | null> {
-  for (let attempt = 0; attempt < 2; attempt++) {
+  const stat = () => $.fs.stat(path).then(s => ({ size: s.size, mtimeMs: s.mtimeMs })).catch(() => null)
+  for (let attempt = 0; attempt < APPEND_TRIES; attempt++) {
     try {
-      const before = await $.fs.stat(path).catch(() => null)
+      const before = await stat()
       const old = before ? await $.fs.read(path) : ''
-      const after = await $.fs.stat(path).catch(() => null)
-      if ((before?.size ?? -1) !== (after?.size ?? -1)) continue
+      const after = await stat()
+      if (stampOf(before) !== stampOf(after)) continue
       let n = maxId(old)
       const ids: string[] = []
-      let add = ''
+      const entries: string[] = []
       for (const item of items) {
         n++
         const id = `c${pad(n)}`
         ids.push(id)
-        add += entryText(id, item.iso, item.sid, item.trailer)
+        entries.push(entryText(id, item.iso, item.sid, item.trailer))
       }
-      await $.fs.write(path, `${old}${old === '' || old.endsWith('\n') ? '' : '\n'}${add}`)
-      return ids
+      if (stampOf(await stat()) !== stampOf(after)) continue
+      await $.fs.write(path, `${old}${old === '' || old.endsWith('\n') ? '' : '\n'}${entries.join('')}`)
+      const written = await $.fs.read(path)
+      if (entries.every(entry => written.includes(entry))) return ids
     } catch {
-      // retry once, then give up
+      // start over, then give up
     }
   }
   return null

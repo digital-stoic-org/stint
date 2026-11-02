@@ -1,5 +1,7 @@
-import { expect, test } from 'claude-code/testing'
-import { CLAUSES, RULE_TEXT, ROUTE, checkpointOn, entryText, hideTrailer, journalPath, journalRule, maxId, pad, parseJournal, parseTrailer, setCheckpoint, splitTrailer, trailersOf } from '../hooks/checkpoint.ts'
+import { expect, mock, test } from 'claude-code/testing'
+import type { Engine } from 'claude-code/testing'
+import type { On } from 'claude-code'
+import { APPEND_TRIES, CLAUSES, RULE_TEXT, ROUTE, checkpointOn, entryText, hideTrailer, journalPath, journalRule, maxId, pad, parseJournal, parseTrailer, setCheckpoint, splitTrailer, trailersOf } from '../hooks/checkpoint.ts'
 
 const TRAILER = '<!-- ckpt decision: keep A · reasoning: B follows -->'
 
@@ -186,4 +188,137 @@ test('setCheckpoint: only the value off turns it off, anything else reads as the
   setCheckpoint('off')
   setCheckpoint('banana')
   expect(checkpointOn()).toBe(true)
+})
+
+// ---------- journal concurrency (appendEntries, driven through the plugin's own turn.complete) ----------
+
+// The test engine has no `$.fs`: the journal write runs inside pit's turn.complete hook, over these one-file stand-ins. Another session can act at a chosen moment
+// (the callbacks run after the call's value is fixed).
+type FakeFs = {
+  text: string | undefined
+  mtime: number
+  stats: number
+  reads: number
+  writes: number
+  afterStat?: (n: number) => void
+  afterRead?: (n: number) => void
+  afterWrite?: (n: number) => void
+}
+
+function world(on: On, text?: string): FakeFs {
+  const f: FakeFs = { text, mtime: 1, stats: 0, reads: 0, writes: 0 }
+  mock.clock(on, { now: 1_000_000 })
+  on('session.id', () => ({ value: 'sess-1' }))
+  on('session.root', () => ({ value: '/work' }))
+  on('session.cwd', () => ({ value: '/work' }))
+  on('config.list', () => ({ value: [] }) as never)
+  on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200_000, tokens: 1_000, breakdown: { autoCompactThreshold: 0 } }, rateLimits: [] } }) as never)
+  on('session.measure', (_$, e) => ({ changed: [...e.changed] }))
+  on('turn.start', (_$, e) => ({ turnId: e.turnId }))
+  on('turn.complete', (_$, e) => ({ text: e.answer }))
+  const store = new Map<string, unknown>()
+  on('store.get', (_$, e) => ({ value: store.get(e.key) }))
+  on('store.set', (_$, e) => (store.set(e.key, e.value), { value: undefined }))
+  on('store.delete', (_$, e) => (store.delete(e.key), { value: undefined }))
+  on('fs.stat', () => {
+    f.stats++
+    const out = f.text === undefined ? { deny: 'ENOENT' } : { value: { kind: 'file', size: f.text.length, mtimeMs: f.mtime, isLink: false } }
+    f.afterStat?.(f.stats)
+    return out as never
+  })
+  on('fs.read', () => {
+    f.reads++
+    const out = f.text === undefined ? { deny: 'ENOENT' } : { value: f.text }
+    f.afterRead?.(f.reads)
+    return out as never
+  })
+  on('fs.write', (_$, e) => {
+    f.writes++
+    f.text = e.text
+    f.mtime++
+    f.afterWrite?.(f.writes)
+    return { value: undefined } as never
+  })
+  return f
+}
+
+// Another session appends an entry (its own read-modify-write, done in one step here).
+function otherAppends(f: FakeFs, id: string) {
+  f.text = `${f.text ?? ''}${entryText(id, '2026-01-01T00:00:00.000Z', 'other', `<!-- ckpt open: from ${id} -->`)}`
+  f.mtime++
+}
+
+const FIRST = entryText('c01', '2026-01-01T00:00:00.000Z', 'first', '<!-- ckpt decision: base -->')
+const MINE = '<!-- ckpt decision: mine -->'
+const answered = ($: Engine, answer: string, turnId = 't1') => $.turn.complete({ answer, durationMs: 1, isAborted: false, turnId, reason: 'answer' } as never)
+const idsOf = (f: FakeFs) => parseJournal(f.text ?? '').map(e => e.id)
+
+test('journal: a writer landing between our read and our check -> start over, nothing lost, no duplicate id', async ($, on) => {
+  const f = world(on, FIRST)
+  f.afterRead = n => { if (n === 1) otherAppends(f, 'c02') }
+  await answered($, `Done.\n${MINE}`)
+  expect(idsOf(f)).toEqual(['c01', 'c02', 'c03'])
+  expect(parseJournal(f.text ?? '')[2]?.trailer).toBe(MINE)
+  expect(f.writes).toBe(1)
+})
+
+test('journal: a writer landing between our check and the stat before the write -> start over, ids recomputed', async ($, on) => {
+  const f = world(on, FIRST)
+  f.afterStat = n => { if (n === 2) otherAppends(f, 'c02') }
+  await answered($, `Done.\n${MINE}`)
+  expect(idsOf(f)).toEqual(['c01', 'c02', 'c03'])
+  expect(f.writes).toBe(1)
+})
+
+test('journal: an mtime change with the same size counts as another writer', async ($, on) => {
+  const f = world(on, FIRST)
+  f.afterStat = n => { if (n === 2) f.mtime++ }
+  await answered($, `Done.\n${MINE}`)
+  expect(idsOf(f)).toEqual(['c01', 'c02'])
+  expect(f.writes).toBe(1)
+  expect(f.reads).toBe(3)
+})
+
+test('journal: a writer that rewrites the file right after ours is caught by the read-back, our entry is added again on its content', async ($, on) => {
+  const f = world(on, FIRST)
+  f.afterWrite = n => {
+    if (n !== 1) return
+    f.text = FIRST
+    otherAppends(f, 'c02')
+  }
+  await answered($, `Done.\n${MINE}`)
+  expect(idsOf(f)).toEqual(['c01', 'c02', 'c03'])
+  expect(parseJournal(f.text ?? '')[2]?.trailer).toBe(MINE)
+  expect(f.writes).toBe(2)
+})
+
+test('journal: several trailers keep their order and consecutive ids, on a new file too', async ($, on) => {
+  const f = world(on)
+  await answered($, `Done.\n${MINE}\nand\n<!-- ckpt open: second -->`)
+  expect(idsOf(f)).toEqual(['c01', 'c02'])
+  expect((f.text ?? '').indexOf('decision: mine')).toBeLessThan((f.text ?? '').indexOf('open: second'))
+  expect(f.writes).toBe(1)
+})
+
+test('journal: a file erased after every write gives up after APPEND_TRIES writes, leaves the file as it was, and the turn goes on', async ($, on) => {
+  const f = world(on, FIRST)
+  f.afterWrite = () => { f.text = FIRST; f.mtime++ }
+  await answered($, `Done.\n${MINE}`)
+  expect(f.writes).toBe(APPEND_TRIES)
+  expect(f.text).toBe(FIRST)
+})
+
+test('journal: a file that never stops changing gives up after APPEND_TRIES tries without writing', async ($, on) => {
+  const f = world(on, FIRST)
+  f.afterStat = () => { f.mtime++ }
+  await answered($, `Done.\n${MINE}`)
+  expect(f.writes).toBe(0)
+  expect(f.stats).toBe(2 * APPEND_TRIES)
+  expect(f.text).toBe(FIRST)
+})
+
+test('journal: two answers closed together in one process are serialized, ids consecutive', async ($, on) => {
+  const f = world(on, FIRST)
+  await Promise.all([answered($, `A\n${MINE}`, 't1'), answered($, `B\n${MINE}`, 't2')])
+  expect(idsOf(f)).toEqual(['c01', 'c02', 'c03'])
 })
