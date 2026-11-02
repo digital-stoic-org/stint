@@ -1,23 +1,31 @@
 import { expect, test } from 'claude-code/testing'
-import { CREW_BLOCK, CREW_DEFAULTS, CREW_MARKER, CREW_ROOTS, CREW_SAMPLES, CREW_TEXT, DELEGATE_RATIO, addSample, claudeMdHasCrew, crewOn, crewText, median, numbersOf, promptTokens, readCrewStore, setCrew, withCrew } from '../hooks/crew.ts'
+import { CREW_BLOCK, CREW_BRIEF_LINE, CREW_DEFAULTS, CREW_GATE_LINE, CREW_MARKER, CREW_ROOTS, CREW_SAMPLES, CREW_TEXT, DELEGATE_RATIO, addSample, claudeMdHasCrew, crewOn, crewText, median, numbersOf, promptTokens, readCrewStore, setCrew, withCrew } from '../hooks/crew.ts'
 import { RULE_TEXT } from '../hooks/checkpoint.ts'
 
-test('CREW_TEXT: starts with the marker heading, eight principle lines, no wrapped line', () => {
+test('CREW_TEXT: starts with the marker heading, eleven principle lines, no wrapped line', () => {
   const lines = CREW_TEXT.split('\n')
   expect(lines[0]).toBe(CREW_MARKER)
   expect(CREW_MARKER).toBe('## Crew (stint)')
-  expect(lines.slice(1)).toHaveLength(8)
+  expect(lines.slice(1)).toHaveLength(11)
   for (const l of lines.slice(1)) expect(l.startsWith('- ')).toBe(true)
 })
 
-test('CREW_TEXT: holds for a delegate too (conditional delegate / report lines), no "pass it on" line', () => {
-  expect(CREW_TEXT).toContain('- When you delegate:')
-  expect(CREW_TEXT).toContain('- When you report,')
+test('CREW_TEXT: holds for a delegate too (conditional brief / debrief lines), no "pass it on" line', () => {
+  expect(CREW_TEXT).toContain('- When you brief (a sub-agent prompt, or a mandate file whose path you send to a session):')
+  expect(CREW_TEXT).toContain('- When you debrief:')
   expect(CREW_TEXT).not.toMatch(/pass (these|the) principles|in your briefs/i)
 })
 
-test('CREW_TEXT: brief and proof content kept from the plan draft', () => {
-  for (const s of ['absolute paths', 'files it alone writes', 'closed reading list', 'stop conditions', 'deliverable on disk', 'its proof command', 're-check a report you receive on disk']) expect(CREW_TEXT).toContain(s)
+test('CREW_TEXT (0.5.3): the first six lines are 0.5.2\'s, then the five lines between sessions, word for word', () => {
+  const lines = CREW_TEXT.split('\n').slice(1)
+  expect(lines.slice(0, 6).map(l => l.split(':')[0])).toEqual(['- Context is the budget', '- Inline', '- Fresh sub-agent', '- Fork', '- Model by the work, set explicitly in every delegation', '- Switch the session\'s model only at a pit (the cache is per model). A closed phase or a pause longer than the cache life'])
+  expect(lines.slice(6)).toEqual([
+    '- Between sessions, send only what the receiver needs to act: a brief, a readback, a blocker, a debrief. No acknowledgements, thanks, "standing by" or recap; 1-3 lines, pointers not content; never answer a message that asks nothing.',
+    '- When you brief (a sub-agent prompt, or a mandate file whose path you send to a session): goal, absolute paths, files it alone writes, closed reading list, stop conditions, deliverable, what you don\'t know, gate; ask a session for a readback before work.',
+    '- Gate: human when the work is irreversible, outward-facing, costly or changes scope (commits, pushes, deletes, spending, public text, settings), or when unsure; otherwise the sender may confirm the readback. The human answers in the receiver\'s window.',
+    '- When you debrief: deliverable path, checkpoint ids (cNN), the proof command for each fact, what you don\'t know. Re-check a debrief you receive on disk before relaying it.',
+    '- The first time you exchange with a session, give the absolute paths of your notes and journal.',
+  ])
 })
 
 test('CREW_TEXT: routing heuristic (0.5.2): budget, inline, fresh sub-agent, fork, model tier, pit', () => {
@@ -41,9 +49,9 @@ test('crewText: the static defaults are ~11k cold start and > ~7k to delegate (b
   expect(t.split('\n')).toHaveLength(CREW_TEXT.split('\n').length)
 })
 
-test('CREW_TEXT: no model names, prices, project paths; short (under 1600 characters)', () => {
+test('CREW_TEXT: no model names, prices, project paths; short (under 2200 characters)', () => {
   expect(CREW_TEXT).not.toMatch(/opus|sonnet|haiku|fable|gpt|gemini|\$\s?\d|\d+\s?(usd|eur)|praxis|CLAUDE\.md|\/repos\//i)
-  expect(CREW_TEXT.length).toBeLessThan(1600)
+  expect(CREW_TEXT.length).toBeLessThan(2200)
 })
 
 test('CREW_MARKER: distinctive: not in the checkpoint rule, not a bare "## Crew"', () => {
@@ -133,4 +141,15 @@ test('readCrewStore, median, promptTokens', () => {
 test('withCrew: takes the filled text', () => {
   const text = crewText({ coldK: 31, delegateK: 20 })
   expect(withCrew([{ name: 'claudeMd', text: 'x' }], text).at(-1)).toEqual({ name: CREW_BLOCK, text })
+})
+
+// ---------- /brief (0.5.3, K18): commands/brief.md holds these two lines word for word (checked by script: the test world reads no file) ----------
+
+test('crew brief and gate lines: exported once, used by the crew text in that order', () => {
+  const lines = CREW_TEXT.split('\n')
+  expect(lines).toContain(CREW_BRIEF_LINE)
+  expect(lines).toContain(CREW_GATE_LINE)
+  expect(lines.indexOf(CREW_GATE_LINE)).toBe(lines.indexOf(CREW_BRIEF_LINE) + 1)
+  expect(CREW_BRIEF_LINE.startsWith('- When you brief (a sub-agent prompt, or a mandate file')).toBe(true)
+  expect(CREW_GATE_LINE.startsWith('- Gate: human when')).toBe(true)
 })

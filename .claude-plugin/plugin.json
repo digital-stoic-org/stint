@@ -1,6 +1,6 @@
 {
   "name": "stint",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "Run your agent in stints. Pit before the redline.",
   "author": {
     "name": "dstoic",
@@ -43,7 +43,7 @@
     "crew": {
       "type": "string",
       "title": "stint · Crew",
-      "description": "Crew principles: one short block sent to the model at the start of each conversation (and after /clear and /compact) on how to route work by what must stay in its context: inline while the cache is warm; a fresh sub-agent for reading-heavy work or fan-out (it starts cold); a fork, which starts warm from the session's cache, for a side task that needs the session's decisions; the model tier set by the work in every delegation, the session kept on the top tier and switched only at a pit; what a brief and a report hold. Sub-agents read it too. It quotes two figures, a sub-agent's cold start and the read size above which delegating pays (an estimate, 0.65 times the cold start): measured per project folder from sub-agents' first requests (numbers only, in the plugin store), filled in when a conversation starts and fixed for it; ~11k and ~7k until measured. Left out when your CLAUDE.md already holds its heading `## Crew (stint)`. on: sent and measured. off: neither; a block already sent stays until /clear or /compact.",
+      "description": "Crew principles: one short block sent to the model at the start of each conversation (and after /clear and /compact) on how to route work by what must stay in its context: inline while the cache is warm; a fresh sub-agent for reading-heavy work or fan-out (it starts cold); a fork, which starts warm from the session's cache, for a side task that needs the session's decisions; the model tier set by the work in every delegation, the session kept on the top tier and switched only at a pit; between sessions, only a brief, a readback, a blocker or a debrief, a mandate written to a file with a readback before work, and a human gate for irreversible, outward-facing, costly or scope-changing work. Sub-agents read it too. It quotes two figures, a sub-agent's cold start and the read size above which delegating pays (an estimate, 0.65 times the cold start): measured per project folder from sub-agents' first requests (numbers only, in the plugin store), filled in when a conversation starts and fixed for it; ~11k and ~7k until measured. Left out when your CLAUDE.md already holds its heading `## Crew (stint)`. on: sent and measured. off: neither; a block already sent stays until /clear or /compact.",
       "default": "on",
       "options": [
         "on",

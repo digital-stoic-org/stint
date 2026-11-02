@@ -1,4 +1,4 @@
-// Crew principles: stint's routing heuristic (context budget, inline / fresh sub-agent / fork, model tier, pit) and the brief/report rules, sent to the model like the checkpoint rule.
+// Crew principles: stint's routing heuristic (context budget, inline / fresh sub-agent / fork, model tier, pit) and the rules between sessions (closed message list, mandate file, gate, debrief), sent to the model like the checkpoint rule.
 // One copy per conversation (first request, again after /clear and /compact); sub-agents read it too (K0 probe), so every line holds for a delegate.
 // The text never changes inside a conversation: no project paths, no model names; numbers in thousands of tokens.
 
@@ -13,6 +13,10 @@ export type CrewNumbers = { coldK: number; delegateK: number }
 // Static defaults until stint has measured this setup: a general-purpose sub-agent's first request in a bare folder (no CLAUDE.md), Opus 5.5, ~11k (K10); 11 × 0.65.
 export const CREW_DEFAULTS: CrewNumbers = { coldK: 11, delegateK: 7 }
 
+// The brief and gate lines, also written word for word in commands/brief.md (the /brief prompt template, no code path).
+export const CREW_BRIEF_LINE = "- When you brief (a sub-agent prompt, or a mandate file whose path you send to a session): goal, absolute paths, files it alone writes, closed reading list, stop conditions, deliverable, what you don't know, gate; ask a session for a readback before work."
+export const CREW_GATE_LINE = "- Gate: human when the work is irreversible, outward-facing, costly or changes scope (commits, pushes, deletes, spending, public text, settings), or when unsure; otherwise the sender may confirm the readback. The human answers in the receiver's window."
+
 export function crewText(n: CrewNumbers = CREW_DEFAULTS): string {
   return `${CREW_MARKER}
 - Context is the budget: what you read inline stays, re-read every turn, until the next pit. Route by what must stay in your context, not by price per call.
@@ -21,8 +25,11 @@ export function crewText(n: CrewNumbers = CREW_DEFAULTS): string {
 - Fork: a side task that needs your decisions and state (a parallel variant, a review in your frame); it starts warm from your cache; not when your context is already heavy or the task needs another model.
 - Model by the work, set explicitly in every delegation: smallest tier for mechanical reading or extraction, middle tier for routine judgment, top tier for framing, audits, irreversible steps. Keep the session on the top tier; spend cheaper tiers on fresh contexts.
 - Switch the session's model only at a pit (the cache is per model). A closed phase or a pause longer than the cache life: pit rather than carry or delegate the rest.
-- When you delegate: goal, absolute paths, files it alone writes, closed reading list, stop conditions, deliverable on disk.
-- When you report, back each fact with its proof command; re-check a report you receive on disk before relaying it.`
+- Between sessions, send only what the receiver needs to act: a brief, a readback, a blocker, a debrief. No acknowledgements, thanks, "standing by" or recap; 1-3 lines, pointers not content; never answer a message that asks nothing.
+${CREW_BRIEF_LINE}
+${CREW_GATE_LINE}
+- When you debrief: deliverable path, checkpoint ids (cNN), the proof command for each fact, what you don't know. Re-check a debrief you receive on disk before relaying it.
+- The first time you exchange with a session, give the absolute paths of your notes and journal.`
 }
 
 export const CREW_TEXT = crewText()

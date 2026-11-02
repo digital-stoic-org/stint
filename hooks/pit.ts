@@ -64,6 +64,8 @@ in_progress:
 - <half-done item — where it stands>
 next:
 - <action>   (2-4 actions, extras only)
+crew:
+- <session — who briefed whom — what is pending>   (sessions exchanged with)
 unknowns:
 - <what is not known>   (never empty)
 stale:
@@ -79,6 +81,7 @@ Rules:
 - A line ending with (cNN) belongs to code: never output one, never reword one. To remove one, designate its id in a retire key.
 - Never restate an item a (cNN) line or an entry below already holds, even reworded and without the id: one item, one line. Wrong: with \`- pick a strict YAML 1.2 parser or a schema check (c01)\` in next, adding \`- choose between a YAML 1.2 parser and schema validation\`. Add a line only for what no (cNN) line says.
 - Retire keys take ids from PREVIOUS NOTES or from the entries below. retire_answered: open: / assumption: items now resolved. retire_done: next items now done. retire_learned: learnings now obsolete (a bug since fixed, a fact replaced by a later one). retire_reversed: decisions proved wrong and reversed. retire_superseded: decisions overtaken by a later decision without being wrong. Omit a retire key when it is empty.
+- crew: one line per session exchanged with since the last pit and still pending: name, who briefed whom, what is pending, their notes path only if quoted verbatim in a message. Drop a line when nothing is pending.
 - Lines starting "agent in flight:" are written by code: never write one.
 - A pointer (absolute path, path:line, command) replaces any explanation. Do not run commands; write them.`
 
@@ -322,9 +325,10 @@ const shortReason = (reason: string) => {
 export const SCALARS_HEADER = ['stream', 'saved', 'status', 'previous_session', 'goal', 'journal', 'journal_cursor']
 // Written after the header scalars when the caller gives a stint number: the stint the notes hand over to (absent in older notes = 1).
 export const STINT_KEY = 'stint'
-export const LISTS = ['read_first', 'read_if_needed', 'decisions', 'learnings', 'discarded', 'in_progress', 'next', 'unknowns', 'stale']
+// `crew` (0.5.3): fork-owned, the sessions this stream exchanges with and what is pending with each; absent in older notes = empty.
+export const LISTS = ['read_first', 'read_if_needed', 'decisions', 'learnings', 'discarded', 'in_progress', 'next', 'crew', 'unknowns', 'stale']
 // Body order of the notes file (deliverable is the only scalar among them).
-export const BODY_ORDER = ['read_first', 'read_if_needed', 'deliverable', 'decisions', 'learnings', 'discarded', 'in_progress', 'next', 'unknowns', 'stale']
+export const BODY_ORDER = ['read_first', 'read_if_needed', 'deliverable', 'decisions', 'learnings', 'discarded', 'in_progress', 'next', 'crew', 'unknowns', 'stale']
 
 export type Keyed = { scalars: Record<string, string>; lists: Record<string, string[]> }
 
@@ -569,7 +573,7 @@ export function assemble(input: AssembleInput): Assembled {
 
   // Hard cap, enforced here whatever the fork wrote. First, silently: read_if_needed compressed (its id kept), then stale and in_progress, oldest first.
   // Still over, with the overflow line on: discarded, learnings (oldest first), then the id'd lines left, lowest cNN first, then the un-id'd lines of
-  // read_if_needed, next, unknowns, decisions. Every dropped id is named on the overflow line (the journal keeps it).
+  // read_if_needed, next, unknowns, crew, decisions. Every dropped id is named on the overflow line (the journal keeps it).
   // Never cut: header scalars, read_first, deliverable, the agent lines.
   const cut: string[] = []
   let text = render()
@@ -626,7 +630,7 @@ export function assemble(input: AssembleInput): Assembled {
       if (best === null) break
       dropAt(best.sec, best.i)
     }
-    for (const sec of ['read_if_needed', 'next', 'unknowns', 'decisions']) {
+    for (const sec of ['read_if_needed', 'next', 'unknowns', 'crew', 'decisions']) {
       while (over() && (lists[sec] as string[]).length > 0) dropAt(sec, 0)
     }
   }

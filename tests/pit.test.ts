@@ -205,7 +205,7 @@ test('assemble: header scalars, body in order, ends with a newline', () => {
     'journal_cursor: c00',
   ])
   const keys = state.split('\n').filter(l => /^[a-z_]+:/.test(l)).map(l => l.split(':')[0])
-  expect(keys).toEqual(['stream', 'saved', 'status', 'previous_session', 'goal', 'journal', 'journal_cursor', 'read_first', 'read_if_needed', 'deliverable', 'decisions', 'learnings', 'discarded', 'in_progress', 'next', 'unknowns', 'stale'])
+  expect(keys).toEqual(['stream', 'saved', 'status', 'previous_session', 'goal', 'journal', 'journal_cursor', 'read_first', 'read_if_needed', 'deliverable', 'decisions', 'learnings', 'discarded', 'in_progress', 'next', 'crew', 'unknowns', 'stale'])
   expect(state.endsWith('\n')).toBe(true)
   expect(r.kind === 'ok' && r.degraded).toBe(false)
 })
@@ -2697,4 +2697,37 @@ test('crew figures: an unreadable store gives the defaults, the block still goes
   await fresh($)
   w.store.set(CREW_STORE, { roots: 'broken' })
   expect((await ctx($, 'x')).blocks.find(b => b.name === CREW_BLOCK)?.text).toBe(CREW_TEXT)
+})
+
+// ---------- notes `crew` section (0.5.3) ----------
+
+test('crew section: the fork prompt teaches it (fork-owned, one line per pending session, no invented path) and lists it before unknowns', () => {
+  const p = forkPrompt(null)
+  expect(p).toContain('crew:\n- <session — who briefed whom — what is pending>')
+  expect(p).toContain('- crew: one line per session exchanged with since the last pit and still pending: name, who briefed whom, what is pending, their notes path only if quoted verbatim in a message. Drop a line when nothing is pending.')
+  expect(p.indexOf('\ncrew:\n')).toBeGreaterThan(p.indexOf('\nnext:\n'))
+  expect(p.indexOf('\ncrew:\n')).toBeLessThan(p.indexOf('\nunknowns:\n'))
+})
+
+test('crew section: the fork\'s lines are kept, between next and unknowns; a (cNN) line from the fork is dropped', () => {
+  const r = asmE(['crew:', '- stint — stint briefed stint-s — K16 go pending', '- other (c09)'])
+  expect(section(r.state, 'crew')).toEqual(['stint — stint briefed stint-s — K16 go pending'])
+  expect(r.state.indexOf('\ncrew:')).toBeGreaterThan(r.state.indexOf('\nnext:'))
+  expect(r.state.indexOf('\ncrew:')).toBeLessThan(r.state.indexOf('\nunknowns:'))
+})
+
+test('crew section: notes without it load and parse; the next save writes it (empty when the fork gives none)', () => {
+  const old = 'stream: proj\nsaved: 2026-10-01T00:00:00.000Z s1\nstatus: x\nprevious_session: none\ngoal: g\n\nread_first:\nnext:\n- a\nunknowns:\n- u\nstale:\n'
+  expect(parseNotes(old).lists.crew).toBeUndefined()
+  const r = asmE([], { prev: old })
+  expect(section(r.state, 'crew')).toEqual([])
+  expect(r.state).toContain('\ncrew:\nunknowns:')
+})
+
+test('crew section: the cap cuts crew lines before un-id\'d decisions', () => {
+  const r = asmE(['decisions:', ...filler('dec', 50).map(l => `${l} — why`), 'crew:', ...filler('crw', 50)])
+  expect(r.kind).toBe('ok')
+  expect(r.cut.some(c => c.startsWith('crew -'))).toBe(true)
+  const left = (k: string) => section(r.state, k).length
+  if (left('decisions') < 50) expect(left('crew')).toBe(0)
 })
