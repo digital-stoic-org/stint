@@ -193,9 +193,9 @@ test('RULE_TEXT: teaches the opener and all eleven clauses, names no project pat
 test('RULE_TEXT: phase is taught with the strict condition, and closing a unit of work is a reason to write a trailer', () => {
   const line = RULE_TEXT.split('\n').find(l => l.startsWith('- `phase:`')) ?? ''
   expect(line).toContain('what just closed')
-  expect(line).toContain('closed and verified')
-  expect(line).toContain('nothing on it is still open')
-  expect(line).toContain('the next step does not need this context')
+  expect(line).toContain('closed, verified')
+  expect(line).toContain('deliverable file')
+  expect(line).toContain('fresh session could resume')
   expect(line).toContain('never for an ordinary decision')
   expect(RULE_TEXT).toContain('or closes a unit of work, end your answer')
 })

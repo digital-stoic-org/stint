@@ -117,7 +117,7 @@ Inside, use any of these clauses, omit the empty ones, one clause of about 20 wo
 - \`open:\` unresolved fork
 - \`definition:\` term=meaning
 - \`refs:\` path→anchor or URL
-- \`phase:\` what just closed; only when that unit of work is closed and verified, nothing on it is still open, and the next step does not need this context; never for an ordinary decision
+- \`phase:\` what just closed; only when that unit is closed, verified, and its result and open points sit in a deliverable file a fresh session could resume from; never for an ordinary decision
 
 Keep the \`${TRAILER_OPEN}\` opener exactly as written: tools find trailers by it.`
 
