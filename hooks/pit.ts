@@ -1,9 +1,12 @@
 import type { EngineInterface, On } from 'claude-code'
 
 import { pitDone, pitStart, refresh as refreshDash, setLap, thresholdsOf } from './dash.ts'
-import { RULE_TEXT, captureCkpt, checkpointOn, claudeMdHasRule, hasPhase, journalPath, journalRule, readJournal, withRule } from './checkpoint.ts'
-import { NOTES_DIR, forbiddenStream, modeOf, otherMode, readNotes, streamDirNames, streamPaths } from './paths.ts'
+import type { Entry } from './checkpoint.ts'
+import { RULE_TEXT, captureCkpt, checkpointOn, claudeMdHasRule, hasPhase, hasPromote, journalPath, journalRule, promotesOf, readJournal, withRule } from './checkpoint.ts'
+import { NOTES_DIR, forbiddenStream, lifecycleSetting, modeOf, otherMode, readNotes, streamDirNames, streamPaths } from './paths.ts'
 import type { Mode } from './paths.ts'
+import { lifecycleText, promoteCheck, promoteLines, rewritePaths, sweepLine, sweepPlan, withLifecycle } from './lifecycle.ts'
+import type { PromoteCounts, SweepCounts } from './lifecycle.ts'
 import { CREW_STORE, addSample, crewOn, crewText, numbersOf, promptTokens, withCrew } from './crew.ts'
 import { debugOn, sidNow, startWatch, stopWatch, trace, writeReport } from './debug.ts'
 import { AUTOPIT_CEILING, AUTOPIT_MIN_TOKENS, getAutopitInfo, getIdleFire, setAutopitInfo, setIdleFire, setPitBoard, setPitLine, writeStatus } from './status.ts'
@@ -187,7 +190,7 @@ async function busyAgents($: EngineInterface): Promise<number | null> {
 
 // ---------- save ----------
 
-type Built = { kind: 'ok'; state: string; cut: string[]; degraded: boolean; stint: number; warn?: string } | { kind: 'blocked'; reason: string }
+type Built = { kind: 'ok'; state: string; cut: string[]; degraded: boolean; stint: number; warn?: string; promote?: string; sweep?: string } | { kind: 'blocked'; reason: string }
 
 async function askFork($: EngineInterface, prompt: string): Promise<{ kind: 'ok'; fork: Keyed } | { kind: 'blocked'; reason: string }> {
   const reply = await $.model.fork({ prompt })
@@ -210,6 +213,88 @@ async function archivePrev($: EngineInterface, cwd: string, stream: string, prev
   throw new Error(`no free archive name for ${archiveName(stream, ms)}`)
 }
 
+// Lifecycle on: the `promote: <work path> -> <project path>` clauses of the entries this save takes in, run after the fork and before assemble (so the notes cite the new path).
+// Code owns every check (lifecycle.ts promoteCheck for the paths, here the disk): the source a file, the target absent with an existing folder. A move is `mv -nT` read back with
+// exists on both ends; any failure leaves the file and is reported, never thrown. A clause whose source is gone and whose target exists was done by an earlier run: silent.
+async function runPromotes($: EngineInterface, root: string, stream: string, entries: readonly Entry[]): Promise<PromoteCounts> {
+  const counts: PromoteCounts = { moved: [], failed: [], already: 0 }
+  const seen = new Set<string>()
+  for (const entry of entries) {
+    for (const item of promotesOf(entry.trailer)) {
+      if ('error' in item) {
+        counts.failed.push({ what: item.text, why: item.error })
+        continue
+      }
+      const key = `${item.src}\n${item.dst}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      const fail = (why: string) => counts.failed.push({ what: item.src, why })
+      try {
+        const bad = promoteCheck(root, item)
+        if (bad !== null) {
+          fail(bad)
+          continue
+        }
+        const src = await $.fs.stat(item.src).catch(() => undefined)
+        if (src === undefined) {
+          if (await $.fs.exists(item.dst)) counts.already++
+          else fail('source missing')
+          continue
+        }
+        if (src.kind !== 'file') {
+          fail('source is not a file')
+          continue
+        }
+        if (await $.fs.exists(item.dst)) {
+          fail('target exists')
+          continue
+        }
+        const parent = await $.fs.stat(item.dst.slice(0, item.dst.lastIndexOf('/'))).catch(() => undefined)
+        if (parent === undefined || parent.kind !== 'dir') {
+          fail('target folder missing')
+          continue
+        }
+        const ran = await $.process.run(['mv', '-nT', item.src, item.dst])
+        if (ran.exitCode === 0 && (await $.fs.exists(item.dst)) && !(await $.fs.exists(item.src))) counts.moved.push(item)
+        else fail(ran.exitCode === 0 ? 'target exists or the move did not happen' : `mv failed (exit ${ran.exitCode})`)
+      } catch (err) {
+        fail(`move not run (${String(err).slice(0, 60)})`)
+      }
+    }
+  }
+  if (counts.moved.length + counts.failed.length + counts.already > 0) trace($, 'promote.done', { ok: counts.moved.length, failed: counts.failed.length, already: counts.already }, stream)
+  return counts
+}
+
+// Lifecycle on, after the notes are written: the scratch files of this stream's work/ that the notes do not cite move to <stream>/archive/work/.
+// Only this stream's folder. A move is `mv -nT` (never overwrites) read back with exists; a failure leaves the file and is counted, never thrown. Returns the pit line part, or undefined.
+async function sweepWork($: EngineInterface, paths: ReturnType<typeof streamPaths>, notes: string, stream: string, keep: readonly string[] = []): Promise<string | undefined> {
+  const counts: SweepCounts = { moved: 0, cited: 0, failed: 0 }
+  try {
+    const entries = await $.fs.list(paths.work).catch(() => [])
+    const archiveWork = `${paths.archive}/work`
+    const plan = sweepPlan(paths.work, archiveWork, entries.filter(e => e.kind === 'file').map(e => e.name), notes, keep)
+    counts.cited = plan.cited.length
+    if (plan.move.length > 0) {
+      const made = await $.process.run(['mkdir', '-p', archiveWork]).catch(() => null)
+      for (const m of plan.move) {
+        try {
+          const ran = made !== null && made.exitCode === 0 ? await $.process.run(['mv', '-nT', m.src, m.dst]) : null
+          if (ran !== null && ran.exitCode === 0 && (await $.fs.exists(m.dst)) && !(await $.fs.exists(m.src))) counts.moved++
+          else counts.failed++
+        } catch {
+          counts.failed++
+        }
+      }
+    }
+  } catch {
+    // nothing to sweep, or the folder is unreadable: the pit goes on
+  }
+  const line = sweepLine(counts)
+  if (line !== null) trace($, 'work.sweep', { ...counts }, stream)
+  return line ?? undefined
+}
+
 // `save`: a checkpoint inside the stint, not a hand-over: the stint number stays.
 async function buildNotes($: EngineInterface, cwd: string, stream: string, mode: Mode, save = false): Promise<Built> {
   try {
@@ -226,7 +311,13 @@ async function buildNotes($: EngineInterface, cwd: string, stream: string, mode:
     if (asked.kind === 'blocked') return asked
     const stint = stintOf(prev) + (save ? 0 : 1)
     const nowMs = await $.clock.now()
-    const result = assemble({ stream, saved: new Date(nowMs).toISOString(), sid, prev, fork: asked.fork, agents, stint, entries: taken.entries, cursorFrom: taken.from, journal })
+    // Lifecycle on: promote first. A moved file's old path is rewritten to the new one in what assemble reads (the fork's lines, the entries, the previous notes); the archived copy of the previous notes stays as it was.
+    const promoted = mode === 'on' ? await runPromotes($, cwd, stream, taken.entries) : undefined
+    const moved = promoted?.moved ?? []
+    const mapFork = (fork: Keyed): Keyed => ({ scalars: Object.fromEntries(Object.entries(fork.scalars).map(([k, v]) => [k, rewritePaths(v, moved)])), lists: Object.fromEntries(Object.entries(fork.lists).map(([k, v]) => [k, v.map(l => rewritePaths(l, moved))])) })
+    const result = moved.length === 0
+      ? assemble({ stream, saved: new Date(nowMs).toISOString(), sid, prev, fork: asked.fork, agents, stint, entries: taken.entries, cursorFrom: taken.from, journal })
+      : assemble({ stream, saved: new Date(nowMs).toISOString(), sid, prev: prev === null ? null : rewritePaths(prev, moved), fork: mapFork(asked.fork), agents, stint, entries: taken.entries.map(e => ({ ...e, trailer: rewritePaths(e.trailer, moved) })), cursorFrom: taken.from, journal })
     if (result.kind === 'blocked') return result
     // The previous file is copied aside before it is overwritten; if the copy fails nothing is overwritten.
     if (prev !== null) {
@@ -241,7 +332,9 @@ async function buildNotes($: EngineInterface, cwd: string, stream: string, mode:
     await $.fs.write(path, result.state)
     if (!(await $.fs.exists(path))) return { kind: 'blocked', reason: `${path} not found after writing` }
     seenNotes.set(path, result.state)
-    return { ...result, stint, ...(warn ? { warn } : {}) }
+    const promote = promoted ? promoteLines(cwd, promoted) : null
+    const sweep = mode === 'on' ? await sweepWork($, paths, result.state, stream, promoted?.failed.map(f => f.what)) : undefined
+    return { ...result, stint, ...(warn ? { warn } : {}), ...(promote ? { promote } : {}), ...(sweep ? { sweep } : {}) }
   } catch (err) {
     return { kind: 'blocked', reason: `error: ${String(err)}` }
   }
@@ -633,7 +726,7 @@ async function runPit($: EngineInterface, argStream: string | undefined, auto?: 
   trace($, 'notes.written', { path: paths.notes, chars: built.state.length }, stream)
   if (save) {
     await savedOnly($, stream, built)
-    return { text: `pit: saved ${paths.rel} (no clear)${built.warn ? `\n${built.warn}` : ''}` }
+    return { text: `pit: saved ${paths.rel} (no clear)${built.promote ? `\n${built.promote}` : ''}${built.sweep ? `\n${built.sweep}` : ''}${built.warn ? `\n${built.warn}` : ''}` }
   }
   pending = { text: built.state, createdAt: await $.clock.now(), root: cwd, stream, ...(debugOn() ? { sid: await sidNow($) } : {}), ...(auto ? { auto } : {}), ...(auto && built.warn ? { warn: built.warn } : {}) }
   try {
@@ -669,7 +762,7 @@ async function runPit($: EngineInterface, argStream: string | undefined, auto?: 
       },
     )
   })
-  return { text: `pit: saved ${paths.rel}${!auto && built.warn ? `\n${built.warn}` : ''}` }
+  return { text: `pit: saved ${paths.rel}${built.promote ? `\n${built.promote}` : ''}${built.sweep ? `\n${built.sweep}` : ''}${!auto && built.warn ? `\n${built.warn}` : ''}` }
 }
 
 async function rejoin($: EngineInterface, args: string) {
@@ -837,7 +930,9 @@ async function notePhase($: EngineInterface, answer: string) {
     mainTurns++
     const was = phase !== undefined
     dropPhase($, 'answer')
-    if (!checkpointOn() || !hasPhase(answer)) {
+    // A `promote:` clause closes a unit like `phase:` does, with lifecycle on only.
+    const closes = checkpointOn() && (hasPhase(answer) || (hasPromote(answer) && (await modeOf($, await rootNow($))) === 'on'))
+    if (!closes) {
       if (was) paint($)
       return
     }
@@ -923,6 +1018,15 @@ export function registerPit(on: On) {
       }
     }
     if (crewOn()) blocks = withCrew(blocks, await crewTextNow($))
+    // Lifecycle on (setting AND marker): the work-folder block, after the crew one. Off touches nothing.
+    if (lifecycleSetting() === 'on') {
+      try {
+        const root = await rootNow($)
+        if ((await modeOf($, root)) === 'on') blocks = withLifecycle(blocks, lifecycleText(streamPaths(root, current(), 'on').work))
+      } catch {
+        // no lifecycle block this time
+      }
+    }
     return blocks === result.blocks ? result : { ...result, blocks }
   }).catch(($, e, next) => next(e))
 

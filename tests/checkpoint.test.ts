@@ -1,14 +1,14 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
-import { APPEND_TRIES, CLAUSES, RULE_TEXT, ROUTE, checkpointOn, entryText, hasPhase, hideTrailer, journalPath, journalRule, maxId, pad, parseJournal, parseTrailer, setCheckpoint, splitTrailer, trailersOf } from '../hooks/checkpoint.ts'
+import { APPEND_TRIES, CLAUSES, RULE_TEXT, ROUTE, checkpointOn, entryText, hasPhase, hasPromote, hideTrailer, journalPath, journalRule, maxId, pad, parseJournal, parseTrailer, promotesOf, setCheckpoint, splitTrailer, trailersOf } from '../hooks/checkpoint.ts'
 
 const TRAILER = '<!-- ckpt decision: keep A · reasoning: B follows -->'
 
 // ---------- menu and routing ----------
 
-test('CLAUSES: stoa\'s ten, in order, then phase', () => {
-  expect(CLAUSES).toEqual(['decision', 'reasoning', 'learning', 'pivot', 'rejected', 'constraint', 'assumption', 'open', 'definition', 'refs', 'phase'])
+test('CLAUSES: stoa\'s ten, in order, then phase, then promote', () => {
+  expect(CLAUSES).toEqual(['decision', 'reasoning', 'learning', 'pivot', 'rejected', 'constraint', 'assumption', 'open', 'definition', 'refs', 'phase', 'promote'])
 })
 
 test('ROUTE: every clause has an entry; reasoning, pivot and phase are journal-only', () => {
@@ -16,6 +16,7 @@ test('ROUTE: every clause has an entry; reasoning, pivot and phase are journal-o
   expect(ROUTE.reasoning).toBeNull()
   expect(ROUTE.pivot).toBeNull()
   expect(ROUTE.phase).toBeNull()
+  expect(ROUTE.promote).toBeNull()
   expect(ROUTE.decision).toBe('decisions')
   expect(ROUTE.constraint).toBe('decisions')
   expect(ROUTE.learning).toBe('learnings')
@@ -186,7 +187,9 @@ test('hideTrailer: idempotent', () => {
 
 test('RULE_TEXT: teaches the opener and all eleven clauses, names no project path', () => {
   expect(RULE_TEXT).toContain('<!-- ckpt')
-  for (const c of CLAUSES) expect(RULE_TEXT).toContain(`\`${c}:\``)
+  // promote is taught by the lifecycle block only (lifecycle off = this text byte-identical)
+  for (const c of CLAUSES.filter(c => c !== 'promote')) expect(RULE_TEXT).toContain(`\`${c}:\``)
+  expect(RULE_TEXT).not.toContain('promote')
   expect(RULE_TEXT).not.toMatch(/praxis|CLAUDE\.md|\.claude\/|\/repos\//i)
 })
 
@@ -352,4 +355,26 @@ test('journal: two answers closed together in one process are serialized, ids co
   const f = world(on, FIRST)
   await Promise.all([answered($, `A\n${MINE}`, 't1'), answered($, `B\n${MINE}`, 't2')])
   expect(idsOf(f)).toEqual(['c01', 'c02', 'c03'])
+})
+
+test('parseTrailer: promote keeps its arrow in the text, and two promote clauses give two entries', () => {
+  expect(parseTrailer('<!-- ckpt promote: /r/.stint/s/work/REPORT-a.md -> /r/wip/a.md -->')).toEqual([{ type: 'promote', text: '/r/.stint/s/work/REPORT-a.md -> /r/wip/a.md' }])
+  const two = parseTrailer('<!-- ckpt promote: /r/.stint/s/work/a.md -> /r/wip/a.md · decision: x · promote: /r/.stint/s/work/b.md -> /r/ref/b.md -->')
+  expect(two.map(c => c.type)).toEqual(['promote', 'decision', 'promote'])
+})
+
+test('promotesOf: splits on the first " -> ", keeps paths with spaces, a clause without the arrow is an error item', () => {
+  expect(promotesOf('<!-- ckpt promote: /r/.stint/s/work/my file.md -> /r/wip/my file -> v2.md · promote: /r/x.md -->')).toEqual([
+    { src: '/r/.stint/s/work/my file.md', dst: '/r/wip/my file -> v2.md' },
+    { error: 'no " -> " between two paths', text: '/r/x.md' },
+  ])
+  expect(promotesOf('<!-- ckpt promote: -> /r/wip/a.md -->')).toEqual([{ error: 'no " -> " between two paths', text: '-> /r/wip/a.md' }])
+  expect(promotesOf('<!-- ckpt decision: a -->')).toEqual([])
+})
+
+test('hasPromote: a closed trailer with a promote clause; prose or an unclosed trailer do not count', () => {
+  expect(hasPromote('done\n<!-- ckpt promote: /a -> /b -->')).toBe(true)
+  expect(hasPromote('promote: /a -> /b')).toBe(false)
+  expect(hasPromote('<!-- ckpt promote: /a -> /b')).toBe(false)
+  expect(hasPromote('<!-- ckpt decision: a -->')).toBe(false)
 })

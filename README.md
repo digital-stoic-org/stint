@@ -85,11 +85,11 @@ After an armed `/pit`, if the injected prompt does not reach a turn within 10 se
 
 ## Checkpoints
 
-On by default. stint teaches the model to end a turn that settles a decision, a learning, a rejected path, a change of frame, an open fork or the close of a unit of work with one HTML comment, the trailer: `<!-- ckpt decision: ... · learning: ... -->`. The rule reaches the model as one context block (`stintCheckpoint`) at the start of each conversation, and again after `/clear` and `/compact`. It is left out when your own instructions (`CLAUDE.md`) already hold the opener `<!-- ckpt`. The clauses are `decision`, `reasoning`, `learning`, `pivot`, `rejected`, `constraint`, `assumption`, `open`, `definition`, `refs`, `phase`. `phase` says what just closed; the rule asks for it only when that unit is closed, verified, and its result and open points sit in a deliverable file a fresh session could resume from, never for an ordinary decision.
+On by default. stint teaches the model to end a turn that settles a decision, a learning, a rejected path, a change of frame, an open fork or the close of a unit of work with one HTML comment, the trailer: `<!-- ckpt decision: ... · learning: ... -->`. The rule reaches the model as one context block (`stintCheckpoint`) at the start of each conversation, and again after `/clear` and `/compact`. It is left out when your own instructions (`CLAUDE.md`) already hold the opener `<!-- ckpt`. The clauses are `decision`, `reasoning`, `learning`, `pivot`, `rejected`, `constraint`, `assumption`, `open`, `definition`, `refs`, `phase`. `phase` says what just closed; the rule asks for it only when that unit is closed, verified, and its result and open points sit in a deliverable file a fresh session could resume from, never for an ordinary decision. With lifecycle on (see [Lifecycle](#lifecycle-experimental)), a twelfth clause, `promote`, moves a work file into the project; the lifecycle block teaches it, not this rule.
 
 What stint does with a trailer:
 
-- **Journal.** Each trailer of a final answer is written, raw, to `<project root>/.stint/<stream>-journal.md` (same root and stream as the notes). A `/rename` before the first save copies the journal to the new name, unless that name already has a journal; otherwise the entries written before the `/rename` stay under the old name, and a message says so. One entry per trailer: a `### cNN <time> <session>` line, then the comment. Entries are only added; to read one, grep its id with the space after it (`grep -A8 '^### c07 ' <journal>`), never read the file whole. A failed write shows `checkpoint not journaled: write failed` on the board for a few seconds and the turn goes on.
+- **Journal.** Each trailer of a final answer is written, raw, to `<project root>/.stint/<stream>-journal.md` (same root and stream as the notes; `.stint/<stream>/journal.md` with lifecycle on). A `/rename` before the first save copies the journal to the new name, unless that name already has a journal; otherwise the entries written before the `/rename` stay under the old name, and a message says so. One entry per trailer: a `### cNN <time> <session>` line, then the comment. Entries are only added; to read one, grep its id with the space after it (`grep -A8 '^### c07 ' <journal>`), never read the file whole. A failed write shows `checkpoint not journaled: write failed` on the board for a few seconds and the turn goes on.
 - **Screen.** The trailer is hidden in the reply. A marker stands in its place, `▸ ckpt: decision, learning`, naming the clauses it holds. In fullscreen a press on the marker shows the raw trailer and a second press hides it. Outside fullscreen only the marker is drawn and the press does nothing; the raw text is then in the journal. The stored message is not changed.
 - **Pit hint.** When the last main-thread answer holds `phase:` and the context holds at least 80k tokens, or 40 % of the window when the window is under 200k (the 🔥 zone of the band), the board reads `good moment to /pit` (with `· auto at <n>%` when it covers the auto-pit message of the red zone). It ranks with the pit's own lines, above the zone messages, and goes at the next prompt, at the next answer without `phase:`, at `/clear` and in a new session. It is a hint only: stint never pits on it.
 
@@ -144,6 +144,54 @@ Each save takes in the journal entries after the cursor, then moves the cursor t
 Body lists: `read_first`, `read_if_needed`, `deliverable`, `decisions`, `learnings`, `discarded`, `in_progress`, `next`, `unknowns`, `stale`. Over the cap, code marks the status `degraded`, shortens long `read_if_needed` lines, then drops items oldest first from `stale` and `in_progress`. Still over, it drops items oldest first from `discarded` and `learnings`, then the lines with an id, lowest id first, then the fork's lines from `read_if_needed`, `next`, `unknowns`, `decisions`. Those cuts are named on an `overflow:` line at the end of `stale`, with every dropped id; the journal still holds them. The header, `read_first`, `deliverable` and the running agents are never cut; if they alone exceed the cap, nothing is written and the pit is refused. Agents still running are listed in `in_progress` by code.
 
 Do not load stint and stoa together.
+
+## Lifecycle (experimental)
+
+Off by default. Agents leave briefs, reports, analyses and logs behind, and these scratch files pile up in the project next to your own. With lifecycle on, each stream gets its own scratch folder under `.stint/`, the model is told to write its intermediate files there, and every pit clears that folder into an archive. stint never deletes a file.
+
+Turn it on per project, in two steps: set `stint · Lifecycle (experimental)` to `on` in `/config` (or `pluginConfigs.stint.options.lifecycle`), then create the marker file in the project root with `mkdir -p .stint && touch .stint/lifecycle`. With the setting `off`, or without the marker file, stint behaves as in 0.5.5: flat files, no block, no sweep, no promote.
+
+Layout, per stream:
+
+```
+.stint/<stream>/notes.md
+.stint/<stream>/journal.md
+.stint/<stream>/archive/        previous notes; swept files in archive/work/
+.stint/<stream>/work/           the stream's scratch folder
+```
+
+The names `archive` and `work` cannot be stream names while lifecycle is on. stint reads both layouts and takes the newest `saved:` of the two, so an older flat file never hides newer notes; it never moves, rewrites or deletes a file of the other layout.
+
+**Rule block.** Like the crew text, one context block (`stintLifecycle`) reaches the model at the start of each conversation and after `/clear` and `/compact`. It names the stream's work folder and tells the model to write every intermediate there by absolute path, never to create a file named `BRIEF-*`, `REPORT-*`, `ANALYSIS-*` or `PROBE-*` in the project, to use no versioned names (`-v2`, `-final`), and how to promote a finished file. It is left out when your own instructions (`CLAUDE.md`) already hold its heading `## Work files (stint)`. Its token cost has not been measured.
+
+**Sweep.** At every pit (`/pit`, `/pit --save`, auto-pit), once the notes are written, the files directly in the pitting stream's `work/` move to `archive/work/` in the same stream folder, except:
+
+- files named `PLAN-*` or `SPEC-*`, which stay until you promote them;
+- files whose name appears in the new notes (cited), which stay for the next pit;
+- files whose name starts with a dot, which are never touched.
+
+Any other name counts as scratch. The pit line reports it: `work/ swept: 2 moved to archive/work/, 1 kept (cited in the notes), 0 failed (left in place)`. A move that fails leaves the file in place and is counted.
+
+**Promote.** A finished file leaves the scratch folder through the `promote` checkpoint clause (the twelfth, taught by the lifecycle block and not by the checkpoint rule): `promote: <absolute work path> -> <absolute project path>`, one clause per file, no `·`, `|` or `;` in the paths. The model designates, the code moves at the next pit, before the notes are assembled, so the notes cite the new place. A move never overwrites. stint checks, and refuses with a reason in the pit line (`promote failed: <source>: <reason>`), unless:
+
+- both paths are absolute, without `..` and without a trailing slash, and use the project root as Claude Code sees it (the same folder reached through a symlink is refused);
+- the source is a file inside a `work/` folder of this project;
+- the target is inside the project and outside `.stint/`;
+- the target's folder exists and the target does not.
+
+A refused file stays in `work/`, and the sweep leaves it alone, so you can correct the clause in a later trailer and retry. A successful promote reads `promoted 1: <target>`. Like `phase`, a `promote` clause counts as a closed unit for the pit hint.
+
+**Turn it off.** Set the option to `off`, or delete `.stint/lifecycle`. Nothing is moved back: the per-stream files stay where they are and both layouts keep being read, the newest notes winning.
+
+Limits:
+
+- Tested on a mock host only; the file moves, the folder listing and the stat of a directory have not run on a real host.
+- A scratch file written in the pit's own turn is archived unless the notes cite it. It is archived, not deleted.
+- The rule is text sent to the model; nothing blocks a write, through Bash or any other tool.
+- A target folder that is a symlink leading outside the project is not detected. This is hygiene, not security.
+- Only files directly in `work/` are swept; a subfolder stays where it is. A source that is a directory is refused.
+- The block names the work folder of the stream the conversation started on. After a `/rename` or `/rejoin` of another stream it points to the old folder; a pit followed by `/clear` gives a block for the new stream.
+- With auto-pit, a refused promote shows only in the text of the pit, not in the fresh session.
 
 ## License
 

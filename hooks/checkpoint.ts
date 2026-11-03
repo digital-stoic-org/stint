@@ -7,14 +7,14 @@ import type { EngineInterface, On, PluginOptions } from 'claude-code'
 import { modeOf, otherMode, streamPaths } from './paths.ts'
 import type { Mode } from './paths.ts'
 
-export type Clause = 'decision' | 'reasoning' | 'learning' | 'pivot' | 'rejected' | 'constraint' | 'assumption' | 'open' | 'definition' | 'refs' | 'phase'
+export type Clause = 'decision' | 'reasoning' | 'learning' | 'pivot' | 'rejected' | 'constraint' | 'assumption' | 'open' | 'definition' | 'refs' | 'phase' | 'promote'
 export type Section = 'read_first' | 'read_if_needed' | 'decisions' | 'learnings' | 'discarded' | 'in_progress' | 'next' | 'unknowns' | 'stale'
 export type Entry = { n: number; id: string; trailer: string }
 
 export const TRAILER_OPEN = '<!-- ckpt'
 
-// stoa's ten, then `phase` (stint 0.4.0): what just closed, the cue for the /pit hint.
-export const CLAUSES: Clause[] = ['decision', 'reasoning', 'learning', 'pivot', 'rejected', 'constraint', 'assumption', 'open', 'definition', 'refs', 'phase']
+// stoa's ten, then `phase` (stint 0.4.0): what just closed, the cue for the /pit hint; then `promote` (lifecycle on only: taught by the lifecycle block, never by RULE_TEXT; parsed in every mode, executed only when lifecycle is on).
+export const CLAUSES: Clause[] = ['decision', 'reasoning', 'learning', 'pivot', 'rejected', 'constraint', 'assumption', 'open', 'definition', 'refs', 'phase', 'promote']
 
 // null = journal only (addressable by id, never in the notes).
 export const ROUTE: Record<Clause, Section | null> = {
@@ -29,6 +29,7 @@ export const ROUTE: Record<Clause, Section | null> = {
   reasoning: null,
   pivot: null,
   phase: null,
+  promote: null,
 }
 
 export const pad = (n: number) => String(n).padStart(2, '0')
@@ -95,6 +96,22 @@ export function trailersOf(answer: string): string[] {
 
 // The answer closes a phase: one of its closed trailers holds a `phase:` clause.
 export const hasPhase = (answer: string) => trailersOf(answer).some(t => parseTrailer(t).some(c => c.type === 'phase'))
+
+// The answer holds a `promote:` clause (lifecycle on: it counts as a pit-hint signal like `phase:`).
+export const hasPromote = (answer: string) => trailersOf(answer).some(t => parseTrailer(t).some(c => c.type === 'promote'))
+
+// The `promote:` clauses of one trailer: `<src> -> <dst>`, split on the FIRST ` -> ` (paths may hold spaces); a clause without the arrow comes back as an error item, not dropped.
+export type Promote = { src: string; dst: string } | { error: string; text: string }
+export function promotesOf(trailer: string): Promote[] {
+  return parseTrailer(trailer)
+    .filter(c => c.type === 'promote')
+    .map(c => {
+      const at = c.text.indexOf(' -> ')
+      const src = at < 0 ? '' : c.text.slice(0, at).trim()
+      const dst = at < 0 ? '' : c.text.slice(at + 4).trim()
+      return src && dst ? { src, dst } : { error: 'no " -> " between two paths', text: c.text }
+    })
+}
 
 // Display only: the stored message and the journal keep the raw trailer.
 export function splitTrailer(text: string): { body: string; trailers: string[]; kinds: string[]; unclosed: boolean } {

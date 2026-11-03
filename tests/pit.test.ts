@@ -49,6 +49,7 @@ import {
 } from '../hooks/pit.ts'
 import { CHECKPOINT_KEY, RULE_BLOCK, RULE_TEXT, journalRule, unionEntries } from '../hooks/checkpoint.ts'
 import { LIFECYCLE_KEY, forbiddenStream, otherMode, streamDirNames, streamPaths } from '../hooks/paths.ts'
+import { LIFECYCLE_BLOCK, WORK_MARKER, lifecycleText, promoteCheck, promoteLines, rewritePaths, sweepLine, sweepPlan, withLifecycle } from '../hooks/lifecycle.ts'
 import { CREW_BLOCK, CREW_KEY, CREW_STORE, CREW_TEXT, addSample, crewText } from '../hooks/crew.ts'
 import { PHASE_FOLLOW_TURNS, PHASE_HINT, phaseHintText } from '../hooks/pit.ts'
 
@@ -2762,8 +2763,8 @@ const setLifecycleRow = ($: Engine, value: string) =>
 const lifecycleRow = (on: On) => on('config.set', { key: LIFECYCLE_KEY }, (_$, e) => ({ value: e.value }))
 
 test('streamPaths: off is the flat layout, on is the per-stream one, trailing slashes absorbed', () => {
-  expect(streamPaths('/work', 'proj', 'off')).toEqual({ dir: '/work/.stint', notes: '/work/.stint/proj-notes.md', journal: '/work/.stint/proj-journal.md', archive: '/work/.stint/archive', rel: '.stint/proj-notes.md', name: 'proj-notes.md' })
-  expect(streamPaths('/work/', 'proj', 'on')).toEqual({ dir: '/work/.stint/proj', notes: '/work/.stint/proj/notes.md', journal: '/work/.stint/proj/journal.md', archive: '/work/.stint/proj/archive', rel: '.stint/proj/notes.md', name: 'proj/notes.md' })
+  expect(streamPaths('/work', 'proj', 'off')).toEqual({ dir: '/work/.stint', notes: '/work/.stint/proj-notes.md', journal: '/work/.stint/proj-journal.md', archive: '/work/.stint/archive', work: '/work/.stint/proj/work', rel: '.stint/proj-notes.md', name: 'proj-notes.md' })
+  expect(streamPaths('/work/', 'proj', 'on')).toEqual({ dir: '/work/.stint/proj', notes: '/work/.stint/proj/notes.md', journal: '/work/.stint/proj/journal.md', archive: '/work/.stint/proj/archive', work: '/work/.stint/proj/work', rel: '.stint/proj/notes.md', name: 'proj/notes.md' })
   expect(otherMode('on')).toBe('off')
   expect(otherMode('off')).toBe('on')
   expect(overwriteWarning('proj')).toBe('⚠️ proj-notes.md was rewritten by another session; its content was merged into these notes and its previous version is in archive/')
@@ -2953,4 +2954,333 @@ test('forbidden names under on: /pit archive and /rejoin work are refused, nothi
   expect(r.text).toContain('"work" is reserved by the per-stream layout')
   await setLifecycleRow($, 'off')
   expect((await pit($, 'archive')).text).toBe('pit: saved .stint/archive-notes.md')
+})
+
+// ---------- lifecycle L3: the work-folder block ----------
+
+const WORK_DIR_PATH = `${CWD}/.stint/proj/work`
+
+test('lifecycleText: the work path fills every placeholder, no other rooted path in the text, the marker heads it', () => {
+  const text = lifecycleText('/W/.stint/s/work')
+  expect(text.startsWith(WORK_MARKER)).toBe(true)
+  expect(text).not.toContain('<WORK>')
+  expect(text.split('/W/.stint/s/work')).toHaveLength(3)
+  const rest = text.split('/W/.stint/s/work').join('')
+  expect(rest).not.toMatch(/\/[\w.-]+\/[\w.-]/)
+  expect(rest).toContain('Project space (everything outside .stint/) belongs to the user')
+  expect(rest.replace('(everything outside .stint/)', '')).not.toContain('.stint/')
+  expect(withLifecycle([{ name: 'claudeMd', text: `x\n${WORK_MARKER}\ny` }], text)).toHaveLength(1)
+  expect(withLifecycle([{ name: LIFECYCLE_BLOCK, text: 'already' }], text)).toEqual([{ name: LIFECYCLE_BLOCK, text: 'already' }])
+})
+
+test('lifecycle off: no work-folder block, with or without the marker', async ($, on) => {
+  const w = world(on, OK())
+  baseContext(on)
+  w.files.set(MARKER, '')
+  await fresh($)
+  expect((await ctx($)).blocks.map(b => b.name)).not.toContain(LIFECYCLE_BLOCK)
+})
+
+test('lifecycle on without the marker file: no work-folder block', { ...LIFE }, async ($, on) => {
+  world(on, OK())
+  baseContext(on)
+  await fresh($)
+  expect((await ctx($)).blocks.map(b => b.name)).not.toContain(LIFECYCLE_BLOCK)
+})
+
+test('lifecycle on with the marker: one work-folder block after the crew one, naming the stream\'s work folder', { ...LIFE }, async ($, on) => {
+  const w = world(on, OK())
+  baseContext(on)
+  w.files.set(MARKER, '')
+  await fresh($)
+  await title($, 'proj')
+  const r = await ctx($)
+  expect(r.blocks.map(b => b.name)).toEqual(['userEmail', 'currentDate', RULE_BLOCK, CREW_BLOCK, LIFECYCLE_BLOCK])
+  expect(r.blocks.find(b => b.name === LIFECYCLE_BLOCK)).toEqual({ name: LIFECYCLE_BLOCK, text: lifecycleText(WORK_DIR_PATH) })
+  expect((await $.prompt.context({ blocks: [{ name: LIFECYCLE_BLOCK, text: 'already' }] } as never)).blocks.filter(b => b.name === LIFECYCLE_BLOCK)).toEqual([{ name: LIFECYCLE_BLOCK, text: 'already' }])
+})
+
+test('lifecycle on: the block is skipped when the project\'s CLAUDE.md already holds the marker', { ...LIFE }, async ($, on) => {
+  const w = world(on, OK())
+  baseContext(on)
+  w.files.set(MARKER, '')
+  await fresh($)
+  const r = await ctx($, `rules\n${WORK_MARKER}\n- own text`)
+  expect(r.blocks.map(b => b.name)).not.toContain(LIFECYCLE_BLOCK)
+})
+
+// ---------- lifecycle L4: the sweep of work/ at pit ----------
+
+const WORK_FILE = (name: string, stream = 'proj') => `${CWD}/.stint/${stream}/work/${name}`
+const SWEPT = (name: string, stream = 'proj') => `${CWD}/.stint/${stream}/archive/work/${name}`
+
+// process.run as `mkdir -p` and `mv -nT` on the world's files; `calls` keeps every argv; `failMv` = names whose mv exits 1 without moving.
+function moveWorld(on: On, w: World, failMv: string[] = []) {
+  const calls: (readonly string[])[] = []
+  on('process.run', (_$, e) => {
+    calls.push(e.argv)
+    const [cmd, ...args] = e.argv
+    const done = (exitCode: number) => ({ value: { exitCode, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
+    if (cmd === 'mkdir') return done(0)
+    if (cmd === 'mv' && args[0] === '-nT') {
+      const [src, dst] = [args[1] as string, args[2] as string]
+      if (failMv.some(n => src.endsWith(n))) return done(1)
+      if (w.files.has(src) && !w.files.has(dst)) {
+        w.files.set(dst, w.files.get(src) as string)
+        w.files.delete(src)
+      }
+      return done(0)
+    }
+    throw new Error(`unexpected ${String(cmd)}`)
+  })
+  return calls
+}
+
+test('sweepPlan: scratch and unknown prefixes move, PLAN-/SPEC- never, a cited basename or path stays, dotfiles are left', () => {
+  const plan = sweepPlan('/W/work', '/W/archive/work', ['BRIEF-a.md', 'REPORT-b.md', 'PLAN-c.md', 'SPEC-d.md', 'probe.log', '.hidden', 'ANALYSIS-e.md', 'PROBE-f.md'], 'deliverable: /W/work/REPORT-b.md\nnext: read ANALYSIS-e.md')
+  expect(plan.move).toEqual([
+    { name: 'BRIEF-a.md', src: '/W/work/BRIEF-a.md', dst: '/W/archive/work/BRIEF-a.md' },
+    { name: 'PROBE-f.md', src: '/W/work/PROBE-f.md', dst: '/W/archive/work/PROBE-f.md' },
+    { name: 'probe.log', src: '/W/work/probe.log', dst: '/W/archive/work/probe.log' },
+  ])
+  expect(plan.cited).toEqual(['ANALYSIS-e.md', 'REPORT-b.md'])
+  expect(sweepLine({ moved: 0, cited: 0, failed: 0 })).toBeNull()
+  expect(sweepLine({ moved: 3, cited: 1, failed: 2 })).toBe('work/ swept: 3 moved to archive/work/, 1 kept (cited in the notes), 2 failed (left in place)')
+})
+
+test('lifecycle on: /pit moves the scratch files of its own work/ to archive/work/, keeps PLAN-, cited and other streams\' files, and says so in the pit line', { ...LIFE }, async ($, on) => {
+  const w = world(on, OK(FORK_LINES.map(l => (l.startsWith('deliverable:') ? `deliverable: ${WORK_FILE('REPORT-keep.md')}` : l))))
+  const calls = moveWorld(on, w)
+  w.files.set(MARKER, '')
+  for (const n of ['BRIEF-a.md', 'REPORT-keep.md', 'PLAN-x.md', 'notes-scratch.txt']) w.files.set(WORK_FILE(n), n)
+  w.files.set(WORK_FILE('BRIEF-other.md', 'other'), 'o')
+  await fresh($)
+  const out = await pit($)
+  expect(out.text).toBe('pit: saved .stint/proj/notes.md\nwork/ swept: 2 moved to archive/work/, 1 kept (cited in the notes), 0 failed (left in place)')
+  expect([...w.files.keys()].filter(f => f.includes('/proj/work/')).sort()).toEqual([WORK_FILE('PLAN-x.md'), WORK_FILE('REPORT-keep.md')])
+  expect(w.files.get(SWEPT('BRIEF-a.md'))).toBe('BRIEF-a.md')
+  expect(w.files.get(SWEPT('notes-scratch.txt'))).toBe('notes-scratch.txt')
+  expect(w.files.has(WORK_FILE('BRIEF-other.md', 'other'))).toBe(true)
+  expect(calls).toContainEqual(['mv', '-nT', WORK_FILE('BRIEF-a.md'), SWEPT('BRIEF-a.md')])
+})
+
+test('lifecycle on: /pit --save sweeps too; a work/ with nothing to sweep adds nothing to the pit line', { ...LIFE }, async ($, on) => {
+  const w = world(on, OK())
+  moveWorld(on, w)
+  w.files.set(MARKER, '')
+  w.files.set(WORK_FILE('PLAN-x.md'), 'p')
+  await fresh($)
+  expect((await pit($, 'proj --save')).text).toBe('pit: saved .stint/proj/notes.md (no clear)')
+  w.files.set(WORK_FILE('REPORT-z.md'), 'r')
+  await w.clock.advance(60_000)
+  expect((await pit($, 'proj --save')).text).toBe('pit: saved .stint/proj/notes.md (no clear)\nwork/ swept: 1 moved to archive/work/, 0 kept (cited in the notes), 0 failed (left in place)')
+  expect(w.files.has(SWEPT('REPORT-z.md'))).toBe(true)
+})
+
+test('lifecycle off: nothing is swept and no process is run', async ($, on) => {
+  const w = world(on, OK())
+  const calls = moveWorld(on, w)
+  w.files.set(MARKER, '')
+  w.files.set(WORK_FILE('BRIEF-a.md'), 'b')
+  await fresh($)
+  expect((await pit($)).text).toBe('pit: saved .stint/proj-notes.md')
+  expect(w.files.has(WORK_FILE('BRIEF-a.md'))).toBe(true)
+  expect(calls).toEqual([])
+})
+
+test('lifecycle on: a failed move or an existing target leaves the file, is counted in the pit line, and the pit still succeeds', { ...LIFE }, async ($, on) => {
+  const w = world(on, OK())
+  moveWorld(on, w, ['BRIEF-bad.md'])
+  w.files.set(MARKER, '')
+  w.files.set(WORK_FILE('BRIEF-bad.md'), 'bad')
+  w.files.set(WORK_FILE('REPORT-dup.md'), 'new')
+  w.files.set(SWEPT('REPORT-dup.md'), 'old')
+  w.files.set(WORK_FILE('REPORT-ok.md'), 'ok')
+  await fresh($)
+  const out = await pit($)
+  expect(out.text).toBe('pit: saved .stint/proj/notes.md\nwork/ swept: 1 moved to archive/work/, 0 kept (cited in the notes), 2 failed (left in place)')
+  expect(w.files.has(WORK_FILE('BRIEF-bad.md'))).toBe(true)
+  expect(w.files.get(WORK_FILE('REPORT-dup.md'))).toBe('new')
+  expect(w.files.get(SWEPT('REPORT-dup.md'))).toBe('old')
+  expect(w.files.has(SWEPT('REPORT-ok.md'))).toBe(true)
+  expect(w.files.get(NEW_NOTES)).toContain('stream: proj')
+})
+
+test('lifecycle on: no process API (the call throws) = every move counted failed, files kept, pit succeeds', { ...LIFE }, async ($, on) => {
+  const w = world(on, OK())
+  w.files.set(MARKER, '')
+  w.files.set(WORK_FILE('REPORT-a.md'), 'a')
+  await fresh($)
+  const out = await pit($)
+  expect(out.text).toContain('0 moved to archive/work/, 0 kept (cited in the notes), 1 failed')
+  expect(w.files.has(WORK_FILE('REPORT-a.md'))).toBe(true)
+})
+
+// ---------- lifecycle L5: promote ----------
+
+const PSRC = WORK_FILE('REPORT-a.md')
+const PROMOTE = (src: string, dst: string) => `<!-- ckpt promote: ${src} -> ${dst} -->`
+// fs.stat for files and for folders (a folder is any path with a file under it), as the host answers it.
+function statWorld(w: World, on: On) {
+  on('fs.stat', (_$, e) => {
+    const text = w.files.get(e.path)
+    if (text !== undefined) return { value: { kind: 'file', size: text.length, mtimeMs: 0, isLink: false } } as never
+    if ([...w.files.keys()].some(k => k.startsWith(`${e.path}/`))) return { value: { kind: 'dir', size: 0, mtimeMs: 0, isLink: false } } as never
+    return { deny: 'ENOENT' }
+  })
+}
+async function promoteWorld($: Engine, on: On, forkText: string | null = OK(), failMv: string[] = []) {
+  const w = world(on, forkText)
+  statWorld(w, on)
+  const calls = moveWorld(on, w, failMv)
+  w.files.set(MARKER, '')
+  w.files.set(`${CWD}/wip/keep.md`, 'k')
+  w.files.set(PSRC, 'report')
+  await fresh($)
+  await title($, 'proj')
+  return { w, calls }
+}
+const failLine = (what: string, why: string) => `promote failed: ${what}: ${why}`
+
+test('promoteCheck: static reasons, in order', () => {
+  const ok = { src: '/r/.stint/s/work/a.md', dst: '/r/wip/a.md' }
+  expect(promoteCheck('/r', ok)).toBeNull()
+  expect(promoteCheck('/r/', ok)).toBeNull()
+  expect(promoteCheck('/r', { ...ok, src: '/r/.stint/s/work/sub/a.md' })).toBeNull()
+  expect(promoteCheck('/r', { ...ok, src: 'work/a.md' })).toContain('absolute')
+  expect(promoteCheck('/r', { ...ok, dst: '/r/wip/../../x.md' })).toContain('absolute')
+  expect(promoteCheck('/r', { ...ok, dst: '/r/wip/' })).toContain('absolute')
+  expect(promoteCheck('/r', { ...ok, src: '/r/wip/a.md' })).toBe('not in a work/ folder of this project')
+  expect(promoteCheck('/r', { ...ok, src: '/r/.stint/s/archive/a.md' })).toBe('not in a work/ folder of this project')
+  expect(promoteCheck('/r', { ...ok, src: '/r/.stint/s/work' })).toBe('not in a work/ folder of this project')
+  expect(promoteCheck('/r', { ...ok, dst: '/r/.stint/s/work/b.md' })).toBe('target inside .stint/')
+  expect(promoteCheck('/r', { ...ok, dst: '/r/.stint' })).toBe('target inside .stint/')
+  expect(promoteCheck('/r', { ...ok, dst: '/elsewhere/a.md' })).toBe('target outside the project root')
+  expect(promoteCheck('/r', { ...ok, dst: '/rx/a.md' })).toBe('target outside the project root')
+})
+
+test('promoteLines + rewritePaths: moved targets relative to the root, one failure per line, nothing = null', () => {
+  expect(promoteLines('/r', { moved: [], failed: [], already: 2 })).toBeNull()
+  expect(promoteLines('/r/', { moved: [{ src: '/r/.stint/s/work/a.md', dst: '/r/wip/a.md' }, { src: '/r/.stint/s/work/b.md', dst: '/r/ref/b.md' }], failed: [{ what: '/r/.stint/s/work/c.md', why: 'target exists' }], already: 0 })).toBe('promoted 2: wip/a.md, ref/b.md\npromote failed: .stint/s/work/c.md: target exists')
+  expect(rewritePaths('see /r/.stint/s/work/a.md and /r/.stint/s/work/ab.md', [{ src: '/r/.stint/s/work/a.md', dst: '/r/wip/a.md' }])).toBe('see /r/wip/a.md and /r/.stint/s/work/ab.md')
+})
+
+test('lifecycle on: a promote clause moves the work file, the pit line says so, and the notes cite the new path', { ...LIFE }, async ($, on) => {
+  const { w, calls } = await promoteWorld($, on, OK(FORK_LINES.map(l => (l.startsWith('deliverable:') ? `deliverable: ${PSRC}` : l))))
+  await answer($, `Done.\n${PROMOTE(PSRC, `${CWD}/wip/a.md`)}`)
+  const out = await pit($)
+  expect(out.text).toBe('pit: saved .stint/proj/notes.md\npromoted 1: wip/a.md')
+  expect(w.files.get(`${CWD}/wip/a.md`)).toBe('report')
+  expect(w.files.has(PSRC)).toBe(false)
+  expect(calls).toContainEqual(['mv', '-nT', PSRC, `${CWD}/wip/a.md`])
+  const notes = w.files.get(NEW_NOTES) as string
+  expect(notes).toContain(`deliverable: ${CWD}/wip/a.md`)
+  expect(notes).not.toContain(PSRC)
+})
+
+test('lifecycle on: a promote of another stream\'s work file is allowed (the orchestrator promotes an executor\'s report)', { ...LIFE }, async ($, on) => {
+  const { w } = await promoteWorld($, on)
+  const other = WORK_FILE('REPORT-x.md', 'exec')
+  w.files.delete(PSRC)
+  w.files.set(other, 'x')
+  await answer($, PROMOTE(other, `${CWD}/wip/x.md`))
+  expect((await pit($)).text).toBe('pit: saved .stint/proj/notes.md\npromoted 1: wip/x.md')
+  expect(w.files.has(other)).toBe(false)
+  expect(w.files.get(`${CWD}/wip/x.md`)).toBe('x')
+})
+
+test('lifecycle on: every refusal leaves the file in place and names the reason in the pit line', { ...LIFE }, async ($, on) => {
+  const { w } = await promoteWorld($, on)
+  w.files.set(`${CWD}/wip/taken.md`, 'old')
+  w.files.set(`${CWD}/wip/q.md`, 'q')
+  const cases: [string, string, string][] = [
+    [PSRC, `${CWD}/wip/taken.md`, 'target exists'],
+    [PSRC, `${CWD}/nofolder/a.md`, 'target folder missing'],
+    [PSRC, `${CWD}/.stint/proj/work/b.md`, 'target inside .stint/'],
+    [PSRC, '/elsewhere/a.md', 'target outside the project root'],
+    [`${CWD}/wip/q.md`, `${CWD}/wip/q2.md`, 'not in a work/ folder of this project'],
+    [WORK_FILE('REPORT-gone.md'), `${CWD}/wip/gone.md`, 'source missing'],
+    [WORK_FILE('sub'), `${CWD}/wip/sub.md`, 'source is not a file'],
+  ]
+  w.files.set(WORK_FILE('sub/inner.md'), 'i')
+  const trailer = `<!-- ckpt ${cases.map(([s, d]) => `promote: ${s} -> ${d}`).join(' · ')} -->`
+  await answer($, trailer)
+  const text = (await pit($)).text
+  for (const [src, , why] of cases) expect(text).toContain(failLine(src.replace(`${CWD}/`, ''), why))
+  expect(text).not.toContain('promoted')
+  // left in place, and the sweep keeps the source of a failed promote so the clause can be fixed and retried
+  expect(w.files.get(PSRC)).toBe('report')
+  expect(w.files.has(SWEPT('REPORT-a.md'))).toBe(false)
+  expect(text).toContain('1 kept (cited in the notes)')
+  expect(w.files.get(`${CWD}/wip/taken.md`)).toBe('old')
+})
+
+test('lifecycle on: a clause without " -> " and a move that exits non-zero are reported, the pit still succeeds', { ...LIFE }, async ($, on) => {
+  const { w } = await promoteWorld($, on, OK(), ['REPORT-a.md'])
+  await answer($, `<!-- ckpt promote: ${PSRC} · promote: ${PSRC} -> ${CWD}/wip/a.md -->`)
+  const text = (await pit($)).text
+  expect(text).toContain(failLine('.stint/proj/work/REPORT-a.md', 'mv failed (exit 1)'))
+  expect(text).toContain(failLine(`.stint/proj/work/REPORT-a.md`, 'no " -> " between two paths'))
+  expect(w.files.has(PSRC)).toBe(true)
+  expect(w.files.get(NEW_NOTES)).toContain('stream: proj')
+})
+
+test('lifecycle on: a clause whose source is gone and target exists was done by an earlier run: silent', { ...LIFE }, async ($, on) => {
+  const { w } = await promoteWorld($, on)
+  w.files.delete(PSRC)
+  w.files.set(`${CWD}/wip/a.md`, 'report')
+  await answer($, PROMOTE(PSRC, `${CWD}/wip/a.md`))
+  expect((await pit($)).text).toBe('pit: saved .stint/proj/notes.md')
+})
+
+test('lifecycle on: a blocked fork moves nothing', { ...LIFE }, async ($, on) => {
+  const { w, calls } = await promoteWorld($, on, 'GATE: blocked - mid synthesis')
+  await answer($, PROMOTE(PSRC, `${CWD}/wip/a.md`))
+  expect((await pit($)).text).toContain('could not save')
+  expect(w.files.get(PSRC)).toBe('report')
+  expect(calls).toEqual([])
+})
+
+test('lifecycle on: promote runs before the sweep, so the promoted file is moved to the project and not archived; /pit --save promotes too', { ...LIFE }, async ($, on) => {
+  const { w } = await promoteWorld($, on)
+  w.files.set(WORK_FILE('REPORT-c.md'), 'c')
+  await answer($, PROMOTE(PSRC, `${CWD}/wip/a.md`))
+  expect((await pit($, 'proj --save')).text).toBe('pit: saved .stint/proj/notes.md (no clear)\npromoted 1: wip/a.md\nwork/ swept: 1 moved to archive/work/, 0 kept (cited in the notes), 0 failed (left in place)')
+  expect(w.files.get(`${CWD}/wip/a.md`)).toBe('report')
+  expect(w.files.has(SWEPT('REPORT-a.md'))).toBe(false)
+  expect(w.files.has(SWEPT('REPORT-c.md'))).toBe(true)
+})
+
+test('lifecycle off: the promote clause is journaled and ignored: no move, no process call, no hint', async ($, on) => {
+  const w = world(on, OK())
+  statWorld(w, on)
+  const calls = moveWorld(on, w)
+  checkpointRow(on)
+  w.usage = FILL(45)
+  w.files.set(MARKER, '')
+  w.files.set(PSRC, 'report')
+  await fresh($)
+  await title($, 'proj')
+  await answer($, PROMOTE(PSRC, `${CWD}/wip/a.md`))
+  expect(w.files.get(JOURNAL)).toContain('promote:')
+  expect(await boardNow($)).not.toContain(PHASE_HINT)
+  expect((await pit($)).text).toBe('pit: saved .stint/proj-notes.md')
+  expect(w.files.get(PSRC)).toBe('report')
+  expect(calls).toEqual([])
+})
+
+test('lifecycle on: a promote clause counts as a pit-hint signal like phase: (same floor), never an automatic pit', { ...LIFE }, async ($, on) => {
+  const w = world(on, OK())
+  statWorld(w, on)
+  checkpointRow(on)
+  w.usage = FILL(45)
+  w.files.set(MARKER, '')
+  await fresh($)
+  await title($, 'proj')
+  await answer($, PROMOTE(PSRC, `${CWD}/wip/a.md`))
+  expect(await boardNow($)).toBe(PHASE_HINT)
+  w.usage = FILL(30)
+  await answer($, PROMOTE(PSRC, `${CWD}/wip/a.md`))
+  expect(await boardNow($)).not.toContain(PHASE_HINT)
+  expect(w.forkPrompts).toHaveLength(0)
 })

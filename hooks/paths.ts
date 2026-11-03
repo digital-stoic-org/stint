@@ -9,6 +9,7 @@ export type Mode = 'off' | 'on'
 
 export const NOTES_DIR = '.stint'
 export const ARCHIVE_DIR = 'archive'
+export const WORK_DIR = 'work'
 export const LIFECYCLE_MARKER = 'lifecycle'
 // Stream names the per-stream layout cannot hold: `archive` is the flat layout's archive folder, `work` is reserved for the stream's scratch folder.
 export const LAYOUT_RESERVED = ['archive', 'work']
@@ -21,6 +22,8 @@ export type StreamPaths = {
   notes: string
   journal: string
   archive: string
+  // The stream's scratch folder `<dir>/work` (absolute, no trailing slash). Only the lifecycle block and the sweep/promote read it; mode off has no such folder in use.
+  work: string
   // Relative to the root, as shown to the user: `.stint/<stream>-notes.md` or `.stint/<stream>/notes.md`.
   rel: string
   // The notes file as named inside `.stint/` : `<stream>-notes.md` or `<stream>/notes.md`.
@@ -31,9 +34,9 @@ export function streamPaths(root: string, stream: string, mode: Mode): StreamPat
   const base = `${trim(root)}/${NOTES_DIR}`
   if (mode === 'on') {
     const dir = `${base}/${stream}`
-    return { dir, notes: `${dir}/notes.md`, journal: `${dir}/journal.md`, archive: `${dir}/${ARCHIVE_DIR}`, rel: `${NOTES_DIR}/${stream}/notes.md`, name: `${stream}/notes.md` }
+    return { dir, notes: `${dir}/notes.md`, journal: `${dir}/journal.md`, archive: `${dir}/${ARCHIVE_DIR}`, work: `${dir}/${WORK_DIR}`, rel: `${NOTES_DIR}/${stream}/notes.md`, name: `${stream}/notes.md` }
   }
-  return { dir: base, notes: `${base}/${stream}-notes.md`, journal: `${base}/${stream}-journal.md`, archive: `${base}/${ARCHIVE_DIR}`, rel: `${NOTES_DIR}/${stream}-notes.md`, name: `${stream}-notes.md` }
+  return { dir: base, notes: `${base}/${stream}-notes.md`, journal: `${base}/${stream}-journal.md`, archive: `${base}/${ARCHIVE_DIR}`, work: `${base}/${stream}/${WORK_DIR}`, rel: `${NOTES_DIR}/${stream}-notes.md`, name: `${stream}-notes.md` }
 }
 
 export const otherMode = (mode: Mode): Mode => (mode === 'on' ? 'off' : 'on')
