@@ -570,6 +570,7 @@
         <div class="callout c4"><svg viewBox="0 0 28 48" aria-hidden="true"><g filter="url(#v3-wobble-s)"><path d="M10 46 C4 34 20 24 14 8"/><path d="M7 15 L14 6 L21 14"/></g></svg><div class="t"><b><span class="n">4</span>📋 pit board</b>A short message from stint, such as <code>⏸ auto-pit 14:32</code> when the session sits idle. A dash when it has nothing to say.</div></div>
       </div>
       <p class="fig-note hand">watch the revs, and the idle countdown on the board &#8599;</p>
+      <p class="req">The band has three modes in <code>/config</code>: <code>full</code> (emoji), <code>ascii</code> (ASCII only, for terminals that misjudge emoji width) and <code>off</code>. Where there is no band (VS Code, mobile) the same line goes to the status line. Leftmost, <code>&#9888;&#65039; cache 5 min</code> warns when your prompt cache is on the 5-minute TTL (CLI only).</p>
     </div>
   </div>
 </div>
@@ -591,7 +592,7 @@
           <span class="no">2</span>
           <div>
             <h3>Pit.</h3>
-            <p><code>/pit</code>: the agent writes its notes, the context clears itself, and the notes come back as the first message of a fresh window. Driver change, same race. <code>/pit --save</code> saves without clearing. Every save first copies the previous notes to <code>.stint/archive/</code>, and warns if another session rewrote them. Auto-pit does the same by itself after 50 minutes idle, or right after a turn that reaches its ceiling. It holds off while a draft sits in your prompt or an agent is busy.</p>
+            <p><code>/pit</code>: the agent writes its notes, the context clears itself, and the notes come back as the first message of a fresh window. Driver change, same race. <code>/pit --save</code> saves without clearing. Every save first copies the previous notes to <code>.stint/archive/</code>, and warns if another session rewrote them. The notes also take in the checkpoints the model logged along the way (see Checkpoints). Auto-pit does the same by itself after 50 minutes idle, or right after a turn that reaches its ceiling. It holds off while a draft sits in your prompt or an agent is busy.</p>
           </div>
         </li>
         <li>
@@ -621,6 +622,118 @@
   </div>
 </div>
 
+<div class="proc" id="checkpoints">
+  <div class="wrap">
+    <h2>Checkpoints: the notes write themselves</h2>
+    <div class="proc-grid">
+      <ol class="steps">
+        <li>
+          <span class="no">1</span>
+          <div>
+            <h3>Settle.</h3>
+            <p>When a turn settles a decision, a learning, a rejected path, a change of frame, an open fork or a closed unit of work, the model ends its answer with one short comment: <code>&lt;!-- ckpt decision: &hellip; --&gt;</code>.</p>
+          </div>
+        </li>
+        <li>
+          <span class="no">2</span>
+          <div>
+            <h3>Log.</h3>
+            <p>stint writes each one to <code>.stint/&lt;stream&gt;-journal.md</code> and hides it on screen behind a marker such as <code>&#9656; ckpt: decision, learning</code>. In fullscreen, press the marker to read the raw text.</p>
+          </div>
+        </li>
+        <li>
+          <span class="no">3</span>
+          <div>
+            <h3>Pit.</h3>
+            <p>At the next pit, code copies the clauses word for word into the notes, each line ending with its entry id. A model fork writes the rest and cannot reword a line that has an id.</p>
+            <span class="hand">the model designates, the code copies</span>
+          </div>
+        </li>
+      </ol>
+
+      <div>
+      <table class="spec">
+        <caption>Spec · clauses</caption>
+        <thead><tr><th>Clause</th><th>Goes to</th></tr></thead>
+        <tbody>
+          <tr><td class="m">decision, constraint</td><td>decisions</td></tr>
+          <tr><td class="m">learning, definition</td><td>learnings</td></tr>
+          <tr><td class="m">rejected</td><td>discarded</td></tr>
+          <tr><td class="m">open</td><td>next</td></tr>
+          <tr><td class="m">assumption</td><td>unknowns</td></tr>
+          <tr><td class="m">refs</td><td>read_if_needed</td></tr>
+          <tr><td class="m">reasoning, pivot, phase</td><td>journal only</td></tr>
+        </tbody>
+      </table>
+      <p class="req">When the last answer holds <code>phase:</code> (a unit of work closed) and the context is in the 🔥 zone, the board reads <code>good moment to /pit</code>. It is a hint: stint never pits on it. The <code>checkpoint</code> option turns all of this off.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="proc" id="crew">
+  <div class="wrap">
+    <h2>Crew: route work by what must stay in context</h2>
+    <div class="proc-grid">
+      <div>
+        <p>stint sends the model one short block of working principles at the start of each conversation, and again after <code>/clear</code> and <code>/compact</code>. Sub-agents read it too. The context is a budget that is re-read every turn until the next pit, so work goes where it costs least.</p>
+        <p><code>/brief @name &lt;task&gt;</code> asks the model to brief a session or a sub-agent by the same rules: goal, paths, files it alone writes, stop conditions, deliverable, and a human gate when the work is irreversible, outward-facing or costly.</p>
+        <span class="hand">few workers beat many</span>
+      </div>
+
+      <div>
+      <table class="spec">
+        <caption>Spec · routes</caption>
+        <thead><tr><th>Route</th><th>When</th></tr></thead>
+        <tbody>
+          <tr><td class="m">inline</td><td>Short answers while the cache is warm.</td></tr>
+          <tr><td class="m">sub-agent</td><td>Reading-heavy work or fan-out. It starts cold.</td></tr>
+          <tr><td class="m">fork</td><td>A side task that needs the session's decisions. It starts warm.</td></tr>
+          <tr><td class="m">model</td><td>Set by the work in every delegation. Switch the session's model only at a pit.</td></tr>
+          <tr><td class="m">between sessions</td><td>A brief, a readback, a blocker or a debrief. No acknowledgements.</td></tr>
+        </tbody>
+      </table>
+      <p class="req">The block quotes a sub-agent's cold start (about 11k tokens until measured, then the median of your own project's sub-agents) and the read size above which delegating pays. The <code>crew</code> option turns it off.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="proc" id="lifecycle">
+  <div class="wrap">
+    <h2>Lifecycle: scratch files with a home <span class="soon-tag">experimental</span></h2>
+    <div class="proc-grid">
+      <ol class="steps">
+        <li>
+          <span class="no">1</span>
+          <div>
+            <h3>Opt in.</h3>
+            <p>Per project: set <code>lifecycle</code> to <code>on</code> in <code>/config</code>, then run <code>mkdir -p .stint &amp;&amp; touch .stint/lifecycle</code>.</p>
+          </div>
+        </li>
+        <li>
+          <span class="no">2</span>
+          <div>
+            <h3>Work.</h3>
+            <p>Each stream keeps its files under <code>.stint/&lt;stream&gt;/</code>: notes, journal, archive and a <code>work/</code> folder. The model is told to write its briefs, reports and logs in <code>work/</code>, not in your project.</p>
+          </div>
+        </li>
+        <li>
+          <span class="no">3</span>
+          <div>
+            <h3>Sweep.</h3>
+            <p>At each pit, scratch files move to <code>archive/work/</code>. <code>PLAN-*</code> and <code>SPEC-*</code> files, files the new notes cite, and dotfiles stay. A <code>promote:</code> checkpoint clause moves a finished file into the project at the next pit, and never overwrites. Nothing is deleted.</p>
+            <span class="hand">hygiene, not security</span>
+          </div>
+        </li>
+      </ol>
+      <div>
+      <p class="req">Experimental: tested on a mock host only. The rule is text sent to the model; nothing blocks a write. Turn it off by setting the option to <code>off</code> or deleting <code>.stint/lifecycle</code>; nothing is moved back.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="inst" id="install">
   <span id="v3-install"></span>
   <div class="wrap">
@@ -631,7 +744,7 @@
       <div class="cmd"><code>/plugin install stint@pitlane</code><button type="button" class="copy-btn" aria-label="Copy command" title="Copy"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><g class="i-copy"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></g><path class="i-check" d="M4 12.5l5 5L20 6.5"/></svg></button></div>
       <span class="sr" role="status" aria-live="polite"></span>
     </div>
-    <p class="req">Requires Claude Code. <a href="https://github.com/digital-stoic-org/stint">github.com/digital-stoic-org/stint</a></p>
+    <p class="req">Requires Claude Code 2.1.311+. <a href="https://github.com/digital-stoic-org/stint">github.com/digital-stoic-org/stint</a></p>
   </div>
 </div>
 
@@ -668,6 +781,8 @@
           <li><code>dash</code> The band: revs, fuel, stint, board</li>
           <li><code>auto-pit</code> Pits by itself when idle or at the ceiling</li>
           <li><code>checkpoint</code> Logs the moments that matter, builds notes</li>
+          <li><code>crew</code> Routes work by what must stay in context</li>
+          <li><code>lifecycle</code> Experimental: scratch files per stream, swept at each pit</li>
           <li><code>debug</code> Traces a pit whose notes did not come back</li>
         </ul>
       </div>

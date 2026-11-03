@@ -46,16 +46,19 @@ A band above the prompt carries the car's instruments, on by default (`dash`: `f
 | term | reads |
 |---|---|
 | `revs` | Context fill, as a share of the model window (the figure of Claude Code's own status line). The bar has ten cells, one per 10%. When the window is not 200k its size follows the percentage, e.g. `revs <n>%/1M`. |
-| zone emoji | 🚀 under the soft threshold · 🔥 orange from the soft threshold · 🚨 bold red from the hard threshold, fixed, it does not pulse. |
-| thresholds | Soft 80k tokens, hard 120k tokens, which is 40% and 60% of a 200k window. A window under 200k caps them at 40% and 60% of itself. They are not the point where Claude Code compacts; that wall is read by `/pit` alone. |
+| zone emoji | 🚀 under the soft threshold · 🔥 orange from the soft threshold · 🔶 bold orange from the hard threshold · 🚨 bold red from the red threshold, fixed, it does not pulse. |
+| thresholds | Soft 80k tokens (never past 40% of a window under 200k), hard 60% of the window (120k on 200k). The red threshold exists only while auto-pit is on: 10 points of the window under the auto-pit ceiling (70% when the ceiling is 80%), never under the hard one. They are not the point where Claude Code compacts; that wall is read by `/pit` alone, which caps the auto-pit ceiling with it. |
 | `↑<n>` | The last rise of revs, for 3 seconds. |
 | `⛽` | What is left of the tighter of the five-hour and seven-day plan windows. Shown only below 30%, and only when the host reports rate limits. |
 | `🏁` | The stint counter, shown from the second stint: +1 at each successful `/pit`, taken from the notes by `/rejoin`. |
 | `📋` | Pit board: the sign the crew holds over the pit wall; one short message, `—` when empty. It is cut first when the line is too wide. |
+| `⚠️ cache 5 min · auto-pit rebuilds the context` | Leftmost, bold orange, while the main conversation's prompt cache is on the 5-minute TTL instead of 1 hour (`! cache 5min` in `ascii`). The idle auto-pit assumes the 1-hour cache; on 5 minutes the fresh window is rebuilt from scratch. stint reads the TTL from the tail of the transcript at the end of each main turn, so it needs the CLI; elsewhere the warning never shows. |
 
 The revs figure flashes for half a second at each upward crossing of a threshold, and the fuel segment flashes when it appears. Nothing else repeats.
 
-A toast appears once per upward crossing: at the soft threshold (5 s, `plan your pit`) and at the hard one (10 s, `REDLINE · box this lap: /pit`, and the board keeps that message while the zone lasts). A successful `/pit` shows `✅ pit done · revs <n>% → <n>% ↓<n>` for 3 s: the revs of the last measure before the `/clear`, then those of the first measure of the fresh context (never an estimate), and a dim `↓<n>` after the revs on the band for 3 s. With no pre-pit value, no measure within 30 s, or no drop, it shows `✅ pit done · fresh window` and no `↓`. The plugin has one toast slot: a redline toast is never replaced by a zone toast, nor a zone toast by the pit one. Toasts re-arm after `/pit`, `/clear` or a new session.
+The board also shows `⏸  will auto-pit at <HH:MM>` (`will auto-pit at <HH:MM>` in `ascii`) once the session has been idle for 15 minutes with an idle auto-pit armed, at 80k tokens or more, until it fires; it is the lowest board message. In the red zone the board reads `will auto-pit at <n>%` and the idle time follows it (` · ⏸  idle: <HH:MM>`).
+
+A toast appears once per upward crossing: at the soft threshold (5 s, `🔥 revs <n>% · auto-pit armed`, or `plan your pit` while auto-pit is off), at the hard one (10 s, `revs <n>% · box this lap: /pit or --save`, and the board keeps that message while the zone lasts) and at the red one (10 s, `🚨 revs <n>% · will auto-pit at <n>%`). A successful `/pit` shows `✅ pit done · revs <n>% → <n>% ↓<n>` for 3 s: the revs of the last measure before the `/clear`, then those of the first measure of the fresh context (never an estimate), and a dim `↓<n>` after the revs on the band for 3 s. With no pre-pit value, no measure within 30 s, or no drop, it shows `✅ pit done · fresh window` and no `↓`. The plugin has one toast slot: a redline toast is never replaced by a zone toast, nor a zone toast by the pit one. Toasts re-arm after `/pit`, `/clear` or a new session.
 
 Option (`/config`, row `stint · Dash`, or `pluginConfigs.stint.options.dash`), applied as soon as it changes:
 
@@ -73,9 +76,34 @@ The board draws what other parts of the plugin write to the session state, `{ pl
 type Board = { text: string; level: 'info' | 'warn' | 'alert'; from: string; until?: number }
 ```
 
-`until` is a time in milliseconds on the host clock; past it the slot reads `—` again. With several candidates the order is `alert`, then the built-in redline message (`box this lap: /pit`), then `warn`, then `info`. Only stint writes this value.
+`until` is a time in milliseconds on the host clock; past it the slot reads `—` again. With several candidates the order is the pit's own lines, then `alert`, then the red-zone message (`will auto-pit at <n>%`), then `warn` together with the hard-zone message (`box this lap: /pit or --save`; on a tie the zone wins), then `info` and the idle timer. Only stint writes this value.
 
 Figures come from Claude Code's `session.measure` event; until it fires, one `$.session.usage()` read after each main-thread turn gives the same reading.
+
+## Auto-pit
+
+On by default. stint runs a pit by itself, in two cases:
+
+- **Idle trigger.** The session sits idle for 50 minutes, which is before the 1-hour prompt cache expires, and the context holds 80k tokens or more. The idle timer shows on the board from 15 minutes of inactivity (see Dash).
+- **Ceiling trigger.** Right after a turn, when the context reaches 80% of the window, or 90% of the point where Claude Code compacts on its own if that comes first (a 200k window compacts well before 80%). The board and the red zone state the effective ceiling, `will auto-pit at <n>%`.
+
+Both skip when a pit is already running, when a turn is running, when a draft sits in the prompt box, when an agent is running or pending, or when the prompt box or the agent list cannot be read: an unverified guard counts as failed. The idle trigger also skips when the last turn is older than 58 minutes (the 1-hour cache is probably gone, for instance after the machine slept) or when the context is below 80k tokens.
+
+The fresh session opens with one line, then a short summary of the notes, and waits for you:
+
+```
+⏸  auto-pitted at 16:43 · 50 min idle · 98k → notes .stint/<stream>-notes.md
+⛔ auto-pitted (ceiling 80%) at 16:43 · 98k → notes .stint/<stream>-notes.md
+```
+
+The pit itself is the `/pit` flow: same notes, same archive, same sweep with lifecycle on.
+
+Option (`/config`, row `stint · Auto-pit`, or `pluginConfigs.stint.options.autopit`):
+
+| `autopit` | does |
+|---|---|
+| `on` (default) | Both triggers, the red zone and the idle timer on the board. |
+| `off` | Never. The soft toast reads `plan your pit` and there is no red zone. |
 
 ## Debug
 
