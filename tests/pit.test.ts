@@ -50,7 +50,7 @@ import {
 import { CHECKPOINT_KEY, RULE_BLOCK, RULE_TEXT, journalRule, unionEntries } from '../hooks/checkpoint.ts'
 import { LIFECYCLE_KEY, forbiddenStream, otherMode, streamDirNames, streamPaths } from '../hooks/paths.ts'
 import { CREW_BLOCK, CREW_KEY, CREW_STORE, CREW_TEXT, addSample, crewText } from '../hooks/crew.ts'
-import { PHASE_FOLLOW_TURNS, PHASE_HINT, PHASE_HINT_FLOOR, phaseHintText } from '../hooks/pit.ts'
+import { PHASE_FOLLOW_TURNS, PHASE_HINT, phaseHintText } from '../hooks/pit.ts'
 
 // ---------- pure functions ----------
 
@@ -2410,7 +2410,6 @@ async function phaseWorld($: Engine, on: On, pct = 45) {
 
 test('phaseHintText: plain, or with the auto-pit ceiling when the fill is in the red zone; auto-pit off = plain', () => {
   expect(PHASE_HINT).toBe('good moment to /pit')
-  expect(PHASE_HINT_FLOOR).toBe(0.4)
   expect(phaseHintText(90_000, 200_000, 80)).toBe(PHASE_HINT)
   expect(phaseHintText(130_000, 200_000, 80)).toBe(PHASE_HINT)
   expect(phaseHintText(140_000, 200_000, 80)).toBe(`${PHASE_HINT} · auto at 80%`)
@@ -2418,11 +2417,27 @@ test('phaseHintText: plain, or with the auto-pit ceiling when the fill is in the
   expect(phaseHintText(150_000, 200_000, null)).toBe(PHASE_HINT)
 })
 
-test('phase hint: an answer with phase: at fill >= 40% puts the hint on the board; where there is no band, the status line keeps the dash with the hint in its board', async ($, on) => {
+test('phase hint: an answer with phase: at fill >= 80k tokens (40% of a 200k window) puts the hint on the board; where there is no band, the status line keeps the dash with the hint in its board', async ($, on) => {
   const w = await phaseWorld($, on, 40)
   await answer($, `Done.\n${PHASE}`)
   expect(lastStatus(w)).toMatch(new RegExp(`revs .*📋 ${PHASE_HINT}$`))
   expect(await boardNow($)).toBe(PHASE_HINT)
+})
+
+test('phase hint: the floor is the dash soft zone in tokens: 1M window 106k shows, 79k does not; a 150k window shows from 60k (its 40% cap)', async ($, on) => {
+  const w = await phaseWorld($, on)
+  w.usage = { tokens: 106_000, wall: 1_000_000, window: 1_000_000 }
+  await answer($, PHASE)
+  expect(await boardNow($)).toBe(PHASE_HINT)
+  w.usage = { tokens: 79_000, wall: 1_000_000, window: 1_000_000 }
+  await answer($, PHASE)
+  expect(await boardNow($)).not.toContain(PHASE_HINT)
+  w.usage = { tokens: 61_000, wall: 150_000, window: 150_000 }
+  await answer($, PHASE)
+  expect(await boardNow($)).toBe(PHASE_HINT)
+  w.usage = { tokens: 59_000, wall: 150_000, window: 150_000 }
+  await answer($, PHASE)
+  expect(await boardNow($)).not.toContain(PHASE_HINT)
 })
 
 test('phase hint: under the floor, without phase:, or with phase: only in the prose there is no hint', async ($, on) => {
@@ -2516,10 +2531,10 @@ test('phase trace (debug on): emitted with the fill, shown, cleared with its rea
   await answer($, PHASE)
   const evs = (await traced(w)).filter(e => e.ev.startsWith('phase.'))
   expect(evs.map(e => [e.ev, e.detail])).toEqual([
-    ['phase.emitted', { pct: 45, floor: 40, hint: true, turn: 1 }],
+    ['phase.emitted', { pct: 45, floor: 80_000, tokens: 90_000, hint: true, turn: 1 }],
     ['phase.hint', { state: 'shown', why: 'answer', pct: 45 }],
     ['phase.hint', { state: 'cleared', why: 'prompt' }],
-    ['phase.emitted', { pct: 30, floor: 40, hint: false, turn: 2 }],
+    ['phase.emitted', { pct: 30, floor: 80_000, tokens: 60_000, hint: false, turn: 2 }],
   ])
   expect(JSON.stringify(evs)).not.toContain('P1 closed')
 })
