@@ -1,24 +1,25 @@
 import type { EngineInterface, On } from 'claude-code'
 
 import { pitDone, pitStart, refresh as refreshDash, setLap, zoneOf } from './dash.ts'
-import { ROUTE, RULE_TEXT, captureCkpt, checkpointOn, claudeMdHasRule, hasPhase, journalPath, journalRule, parseJournal, parseTrailer, withRule } from './checkpoint.ts'
+import { ROUTE, RULE_TEXT, captureCkpt, checkpointOn, claudeMdHasRule, hasPhase, journalPath, journalRule, parseJournal, parseTrailer, readJournal, withRule } from './checkpoint.ts'
 import type { Entry } from './checkpoint.ts'
+import { NOTES_DIR, forbiddenStream, modeOf, otherMode, readNotes, streamDirNames, streamPaths } from './paths.ts'
+import type { Mode } from './paths.ts'
 import { CREW_STORE, addSample, crewOn, crewText, numbersOf, promptTokens, withCrew } from './crew.ts'
 import { debugOn, sidNow, startWatch, stopWatch, trace, writeReport } from './debug.ts'
 import { AUTOPIT_CEILING, AUTOPIT_MIN_TOKENS, getAutopitInfo, getIdleFire, setAutopitInfo, setIdleFire, setPitBoard, setPitLine, writeStatus } from './status.ts'
 import type { AutopitInfo } from './status.ts'
 
-export { AUTOPIT_CEILING, AUTOPIT_MIN_TOKENS }
+export { AUTOPIT_CEILING, AUTOPIT_MIN_TOKENS, NOTES_DIR }
 
 // pit (stint): one mod, two commands.
 //   /pit [stream]      save notes (awaited fork) -> /clear (automatic) -> notes re-injected as the first message of the fresh context
 //   /rejoin [stream]   notes of a stream -> first message of this session
-// Notes live in <session root>/.stint/<stream>-notes.md. One $.model.fork designates every field; code parses, assembles and caps the file.
+// Notes live in <session root>/.stint/<stream>-notes.md (paths.ts holds the per-stream layout, behind the `lifecycle` opt-in). One $.model.fork designates every field; code parses, assembles and caps the file.
 // Command names: `$.command.register` takes letters, digits, `_` and `-` only (CommandSpec.name), so no `stint:pit`: the commands are /pit and /rejoin.
 
 const STORE_KEY = 'stint:pending'
 const STALE_MS = 10 * 60 * 1000
-export const NOTES_DIR = '.stint'
 export const DEFAULT_STREAM = 'main'
 // Hard cap of the notes file, enforced by code: the fork is told the ceiling and the room left, assemble() cuts what still overflows.
 export const NOTES_MAX = 8_000
@@ -88,7 +89,7 @@ Rules:
 // ---------- pure helpers ----------
 
 export const pad = (n: number) => String(n).padStart(2, '0')
-export const notesPath = (cwd: string, stream: string) => `${cwd.replace(/\/+$/, '')}/${NOTES_DIR}/${stream}-notes.md`
+export const notesPath = (cwd: string, stream: string, mode: Mode = 'off') => streamPaths(cwd, stream, mode).notes
 const NOTES_FILE_RE = /^(.+)-notes\.md$/
 
 // Stream names found in a `.stint` listing, sorted; anything that is not a valid `<stream>-notes.md` is ignored.
@@ -101,7 +102,6 @@ export function streamsFromNames(names: string[]): string[] {
   return out.sort()
 }
 
-export const ARCHIVE_DIR = 'archive'
 const ARCHIVE_TRIES = 1_000
 
 // Local time stamp of an archive file name: YYYYMMDD-HHMM.
@@ -430,10 +430,10 @@ export function cursorOf(notes: string | null): number {
 
 // The journal entries a save takes in: those after the cursor of the previous notes. A cursor past the journal's last id (journal trimmed by hand) starts over at 0.
 // No journal text (none yet, unreadable, checkpoint off) = no entry, the cursor carried as it is.
-export function takeEntries(prev: string | null, journal: string | null): { entries: Entry[]; from: number } {
+export function takeEntries(prev: string | null, journal: string | Entry[] | null): { entries: Entry[]; from: number } {
   const from = cursorOf(prev)
   if (journal === null) return { entries: [], from }
-  const all = parseJournal(journal)
+  const all = typeof journal === 'string' ? parseJournal(journal) : journal
   const max = all.reduce((m, e) => Math.max(m, e.n), 0)
   const start = from > max ? 0 : from
   return { entries: all.filter(e => e.n > start), from: start }
@@ -668,8 +668,8 @@ After my go, read the \`read_first\` files before acting.`
 export const injectText = (notes: string, auto?: string, kind: AutoKind = 'idle', warn?: string) =>
   `${notes.trimEnd()}\n\n${auto === undefined ? UNPACK_RULES : autoUnpackRules(auto, kind, warn)}`
 
-export const overwriteWarning = (stream: string) =>
-  `⚠️ ${stream}-notes.md was rewritten by another session; its content was merged into these notes and its previous version is in archive/`
+export const overwriteWarning = (stream: string, mode: Mode = 'off') =>
+  `⚠️ ${streamPaths('', stream, mode).name} was rewritten by another session; its content was merged into these notes and its previous version is in archive/`
 
 function forkFailure(reason: string): string {
   return reason === 'nothing-to-fork' ? 'nothing to save yet: this conversation has no response' : `fork failed (${reason})`
@@ -781,8 +781,14 @@ async function rootNow($: EngineInterface): Promise<string> {
 // Streams that have a notes file in the project root; a missing directory is no notes.
 async function listStreams($: EngineInterface): Promise<string[]> {
   try {
-    const entries = await $.fs.list(`${(await rootNow($)).replace(/\/+$/, '')}/${NOTES_DIR}`)
-    return streamsFromNames(entries.filter(e => e.kind === 'file').map(e => e.name))
+    const root = await rootNow($)
+    const entries = await $.fs.list(`${root.replace(/\/+$/, '')}/${NOTES_DIR}`)
+    const flat = streamsFromNames(entries.filter(e => e.kind === 'file').map(e => e.name))
+    // The per-stream layout: a folder counts only when it holds a notes.md (a stream folder with just work/ is no stream).
+    const dirs = streamDirNames(entries.filter(e => e.kind === 'dir').map(e => e.name), name => STREAM_RE.test(name) && !RESERVED.includes(name))
+    const nested: string[] = []
+    for (const name of dirs) if (await $.fs.exists(streamPaths(root, name, 'on').notes)) nested.push(name)
+    return nested.length === 0 ? flat : [...new Set([...flat, ...nested])].sort()
   } catch {
     return []
   }
@@ -833,9 +839,9 @@ async function askFork($: EngineInterface, prompt: string): Promise<{ kind: 'ok'
   return fork ? { kind: 'ok', fork } : { kind: 'blocked', reason: 'unparseable fork output' }
 }
 
-// Copies the previous notes to <root>/.stint/archive/<stream>-notes-<YYYYMMDD-HHMM>.md; a name already taken gets -2, -3... Never overwrites, never prunes.
-async function archivePrev($: EngineInterface, cwd: string, stream: string, prev: string, ms: number): Promise<string> {
-  const dir = `${cwd.replace(/\/+$/, '')}/${NOTES_DIR}/${ARCHIVE_DIR}`
+// Copies the previous notes to <root>/.stint/archive/<stream>-notes-<YYYYMMDD-HHMM>.md (on: <root>/.stint/<stream>/archive/); a name already taken gets -2, -3... Never overwrites, never prunes.
+async function archivePrev($: EngineInterface, cwd: string, stream: string, prev: string, ms: number, mode: Mode): Promise<string> {
+  const dir = streamPaths(cwd, stream, mode).archive
   for (let n = 1; n <= ARCHIVE_TRIES; n++) {
     const path = `${dir}/${archiveName(stream, ms, n)}`
     if (await $.fs.exists(path)) continue
@@ -846,15 +852,16 @@ async function archivePrev($: EngineInterface, cwd: string, stream: string, prev
 }
 
 // `save`: a checkpoint inside the stint, not a hand-over: the stint number stays.
-async function buildNotes($: EngineInterface, cwd: string, stream: string, save = false): Promise<Built> {
+async function buildNotes($: EngineInterface, cwd: string, stream: string, mode: Mode, save = false): Promise<Built> {
   try {
     const sid = await $.session.id()
-    const path = notesPath(cwd, stream)
-    const prev = await readOptional($, path)
+    const paths = streamPaths(cwd, stream, mode)
+    const path = paths.notes
+    const prev = await readNotes($, cwd, stream, mode)
     const agents = await agentLines($)
     // The journal entries after the cursor of the previous notes (a --save advances the cursor too). Checkpoint off or an unreadable journal = none: fork-only notes.
-    const journal = journalPath(cwd, stream)
-    const taken = takeEntries(prev, checkpointOn() ? await readOptional($, journal).catch(() => null) : null)
+    const journal = paths.journal
+    const taken = takeEntries(prev, checkpointOn() ? await readJournal($, cwd, stream, mode).catch(() => null) : null)
     // One fork per save: an over-cap answer is cut by assemble(), never re-asked.
     const asked = await askFork($, forkPrompt(prev, taken.entries))
     if (asked.kind === 'blocked') return asked
@@ -865,13 +872,13 @@ async function buildNotes($: EngineInterface, cwd: string, stream: string, save 
     // The previous file is copied aside before it is overwritten; if the copy fails nothing is overwritten.
     if (prev !== null) {
       try {
-        await archivePrev($, cwd, stream, prev, nowMs)
+        await archivePrev($, cwd, stream, prev, nowMs, mode)
       } catch (err) {
-        return { kind: 'blocked', reason: `previous notes not archived (${String(err)}); ${NOTES_DIR}/${stream}-notes.md left unchanged` }
+        return { kind: 'blocked', reason: `previous notes not archived (${String(err)}); ${paths.rel} left unchanged` }
       }
     }
     const seen = seenNotes.get(path)
-    const warn = seen !== undefined && prev !== null && prev !== seen ? overwriteWarning(stream) : undefined
+    const warn = seen !== undefined && prev !== null && prev !== seen ? overwriteWarning(stream, mode) : undefined
     await $.fs.write(path, result.state)
     if (!(await $.fs.exists(path))) return { kind: 'blocked', reason: `${path} not found after writing` }
     seenNotes.set(path, result.state)
@@ -1211,6 +1218,7 @@ async function pit($: EngineInterface, args: string) {
 // `save` (/pit --save): the same fork, notes and archive, then stop: no pending, no /clear, no lap change, the context is untouched.
 async function runPit($: EngineInterface, argStream: string | undefined, auto?: AutoMark, save = false) {
   const cwd = await rootNow($)
+  const mode = await modeOf($, cwd)
   const room = await headroom($)
   trace($, 'pit.start', { cwd: await $.session.cwd(), root: cwd, headroom: room, ...(auto ? { auto: true } : {}), ...(save ? { save: true } : {}) }, current())
   if (debugOn()) await traceFollow($, auto !== undefined, save)
@@ -1222,11 +1230,20 @@ async function runPit($: EngineInterface, argStream: string | undefined, auto?: 
     return { text }
   }
 
+  // A stream name the layout cannot hold is refused before it binds.
+  const refused = forbiddenStream(argStream ?? current(), mode)
+  if (refused !== null) {
+    const text = `pit: ${refused}. Nothing saved, the session is unchanged.`
+    outcome = { status: `⚠ ${shortReason(text)}`, board: 'PIT REFUSED, reserved stream name', bad: true }
+    paint($)
+    return { text }
+  }
   // Explicit argument binds for the session; a new command replaces the last outcome.
   if (argStream !== undefined) boundArg = argStream
   outcome = undefined
   hint = undefined
   const stream = current()
+  const paths = streamPaths(cwd, stream, mode)
 
   // Two saves never overlap (a --save and an auto-pit that both passed their checks before either set the flag): the second leaves at once.
   if (saving) return { text: `pit: a pit is already running, its outcome will show in the status line` }
@@ -1236,7 +1253,7 @@ async function runPit($: EngineInterface, argStream: string | undefined, auto?: 
   startProgress($, `${save ? 'Saving' : 'Pitting'} stream "${stream}"`, stream)
   let built: Built
   try {
-    built = await buildNotes($, cwd, stream, save)
+    built = await buildNotes($, cwd, stream, mode, save)
   } finally {
     saving = false
   }
@@ -1254,10 +1271,10 @@ async function runPit($: EngineInterface, argStream: string | undefined, auto?: 
     return { text: `pit: could not save stream "${stream}": ${built.reason.replace(/\.$/, '')}. No /clear run, the session is unchanged.` }
   }
 
-  trace($, 'notes.written', { path: `${cwd}/${NOTES_DIR}/${stream}-notes.md`, chars: built.state.length }, stream)
+  trace($, 'notes.written', { path: paths.notes, chars: built.state.length }, stream)
   if (save) {
     await savedOnly($, stream, built)
-    return { text: `pit: saved ${NOTES_DIR}/${stream}-notes.md (no clear)${built.warn ? `\n${built.warn}` : ''}` }
+    return { text: `pit: saved ${paths.rel} (no clear)${built.warn ? `\n${built.warn}` : ''}` }
   }
   pending = { text: built.state, createdAt: await $.clock.now(), root: cwd, stream, ...(debugOn() ? { sid: await sidNow($) } : {}), ...(auto ? { auto } : {}), ...(auto && built.warn ? { warn: built.warn } : {}) }
   try {
@@ -1293,7 +1310,7 @@ async function runPit($: EngineInterface, argStream: string | undefined, auto?: 
       },
     )
   })
-  return { text: `pit: saved ${NOTES_DIR}/${stream}-notes.md${!auto && built.warn ? `\n${built.warn}` : ''}` }
+  return { text: `pit: saved ${paths.rel}${!auto && built.warn ? `\n${built.warn}` : ''}` }
 }
 
 async function rejoin($: EngineInterface, args: string) {
@@ -1301,6 +1318,7 @@ async function rejoin($: EngineInterface, args: string) {
   if ('error' in parsed) return { text: `rejoin: ${parsed.error}` }
   outcome = undefined
   const cwd = await rootNow($)
+  const mode = await modeOf($, cwd)
   const streams = await listStreams($)
   const list = streams.length ? ` Notes here: ${streams.join(', ')}.` : ''
 
@@ -1313,10 +1331,12 @@ async function rejoin($: EngineInterface, args: string) {
     else return { text: `rejoin: no notes in ${NOTES_DIR}/ of this folder. Nothing loaded.` }
   }
   const chosen = stream as string
+  const refused = forbiddenStream(chosen, mode)
+  if (refused !== null) return { text: `rejoin: ${refused}. Nothing loaded.` }
 
   let notes: string | null
   try {
-    notes = await readOptional($, notesPath(cwd, chosen))
+    notes = await readNotes($, cwd, chosen, mode)
   } catch (err) {
     return { text: `rejoin: cannot read the notes of stream "${chosen}": ${String(err)}` }
   }
@@ -1324,7 +1344,7 @@ async function rejoin($: EngineInterface, args: string) {
 
   boundArg = chosen
   hint = undefined
-  seenNotes.set(notesPath(cwd, chosen), notes)
+  seenNotes.set(notesPath(cwd, chosen, mode), notes)
   await setLap($, stintOf(notes))
   paint($)
   inject($, chosen, notes, true)
@@ -1356,10 +1376,13 @@ async function noteTitle($: EngineInterface, title: string | undefined) {
 async function followRename($: EngineInterface, from: string, to: string) {
   try {
     const root = await rootNow($)
-    const src = journalPath(root, from)
+    const mode = await modeOf($, root)
+    // The journal moves within the layout in force, from whichever layout holds it; notes or a journal of the new name in either layout stop the copy.
+    const own = journalPath(root, from, mode)
+    const src = (await $.fs.exists(own)) ? own : journalPath(root, from, otherMode(mode))
     if (!(await $.fs.exists(src))) return
-    const dst = journalPath(root, to)
-    if ((await $.fs.exists(notesPath(root, from))) || (await $.fs.exists(dst))) {
+    const dst = journalPath(root, to, mode)
+    if ((await $.fs.exists(notesPath(root, from, mode))) || (await $.fs.exists(notesPath(root, from, otherMode(mode)))) || (await $.fs.exists(dst)) || (await $.fs.exists(journalPath(root, to, otherMode(mode))))) {
       $.ui.toast(`stint: this session now saves to stream "${to}"; what was journaled before /rename stays under "${from}" (/rejoin ${from})`, { timeoutMs: ERROR_TOAST_MS })
       return
     }
@@ -1379,12 +1402,14 @@ async function journalCkpt($: EngineInterface, answer: string) {
   try {
     const stream = current()
     const root = await rootNow($)
-    const res = await captureCkpt($, root, stream, answer)
+    const mode = await modeOf($, root)
+    const refused = forbiddenStream(stream, mode)
+    const res = refused === null ? await captureCkpt($, root, stream, answer) : { ids: [] as string[], ok: false }
     if (res.ok) {
-      if (res.ids.length > 0) journaled.set(stream, journalPath(root, stream))
+      if (res.ids.length > 0) journaled.set(stream, journalPath(root, stream, mode))
       return
     }
-    const board = 'checkpoint not journaled: write failed'
+    const board = refused === null ? 'checkpoint not journaled: write failed' : `checkpoint not journaled: stream name "${stream}" is reserved`
     const line: Line = { status: `⚠ ${board}`, board, bad: true }
     outcome = line
     paint($)
@@ -1530,7 +1555,8 @@ export function registerPit(on: On) {
     if (checkpointOn()) {
       try {
         claudeHasRule = claudeMdHasRule(blocks)
-        blocks = withRule(blocks, journalPath(await rootNow($), current()))
+        const root = await rootNow($)
+        blocks = withRule(blocks, journalPath(root, current(), await modeOf($, root)))
       } catch {
         // no rule this time; the crew block still goes
       }
@@ -1667,7 +1693,7 @@ export function registerPit(on: On) {
     // Rail 3: the binding survives /clear; restore it when a mod reload lost it.
     if (boundArg === null) boundArg = armed.stream
     if (armed.auto) skipNextArm = true
-    inject($, armed.stream, armed.text, false, armed.auto ? { line: autoLine(armed.auto, `${NOTES_DIR}/${armed.stream}-notes.md`), kind: armed.auto.kind === 'ceiling' ? 'ceiling' : 'idle', warn: armed.warn } : undefined)
+    inject($, armed.stream, armed.text, false, armed.auto ? { line: autoLine(armed.auto, streamPaths(armed.root, armed.stream, await modeOf($, armed.root)).rel), kind: armed.auto.kind === 'ceiling' ? 'ceiling' : 'idle', warn: armed.warn } : undefined)
     $.ui.toast(`Fresh session started with the notes of stream "${armed.stream}"`)
     return next(e)
   }).catch(($, e, next) => {

@@ -4,6 +4,9 @@
 
 import type { EngineInterface, On, PluginOptions } from 'claude-code'
 
+import { modeOf, otherMode, streamPaths } from './paths.ts'
+import type { Mode } from './paths.ts'
+
 export type Clause = 'decision' | 'reasoning' | 'learning' | 'pivot' | 'rejected' | 'constraint' | 'assumption' | 'open' | 'definition' | 'refs' | 'phase'
 export type Section = 'read_first' | 'read_if_needed' | 'decisions' | 'learnings' | 'discarded' | 'in_progress' | 'next' | 'unknowns' | 'stale'
 export type Entry = { n: number; id: string; trailer: string }
@@ -60,7 +63,26 @@ export const maxId = (text: string) => parseJournal(text).reduce((m, e) => Math.
 export const entryText = (id: string, iso: string, sid: string, trailer: string) => `### ${id} ${iso} ${sid}\n${trailer}\n\n`
 
 // Root-anchored: the caller passes the session root, never the cwd (a Bash `cd` moves the cwd).
-export const journalPath = (root: string, stream: string) => `${root.replace(/\/+$/, '')}/.stint/${stream}-journal.md`
+export const journalPath = (root: string, stream: string, mode: Mode = 'off') => streamPaths(root, stream, mode).journal
+
+// Entries of several journal texts as one list, one per id, ascending: the first text wins an id held by two (the layout in force is passed first).
+export function unionEntries(texts: string[]): Entry[] {
+  const byId = new Map<number, Entry>()
+  for (const text of texts) for (const e of parseJournal(text)) if (!byId.has(e.n)) byId.set(e.n, e)
+  return [...byId.values()].sort((a, b) => a.n - b.n)
+}
+
+async function readIf($: EngineInterface, path: string): Promise<string | null> {
+  return (await $.fs.exists(path)) ? await $.fs.read(path) : null
+}
+
+// The journal entries of a stream across both layouts (the file of `mode` first). Null = no journal in either. A read error of the layout in force propagates; the other layout's is ignored.
+export async function readJournal($: EngineInterface, root: string, stream: string, mode: Mode): Promise<Entry[] | null> {
+  const own = await readIf($, streamPaths(root, stream, mode).journal)
+  const other = await readIf($, streamPaths(root, stream, otherMode(mode)).journal).catch(() => null)
+  if (own === null && other === null) return null
+  return unionEntries([own ?? '', other ?? ''])
+}
 
 export function journalRule(path: string): string {
   return `Journal ${path}: never read it whole; to see an entry, grep by id: grep -A8 '^### cNN ' ${path} (the space after the id keeps c07 from matching c070)`
@@ -177,7 +199,7 @@ const stampOf = (s: { size: number; mtimeMs: number } | null) => (s === null ? '
 //   -> write -> read back and check every entry we added is there; a later writer that erased them makes us start over on the fresh content.
 // At most APPEND_TRIES tries. The window left is the few ms between the last stat and the write; the read-back catches a write that lands after ours.
 // Null = not written (or not proved written); a failed read-back after a write that did land can leave a duplicate on the retry. Never throws.
-export async function appendEntries($: EngineInterface, path: string, items: Item[]): Promise<string[] | null> {
+export async function appendEntries($: EngineInterface, path: string, items: Item[], others: string[] = []): Promise<string[] | null> {
   const stat = () => $.fs.stat(path).then(s => ({ size: s.size, mtimeMs: s.mtimeMs })).catch(() => null)
   for (let attempt = 0; attempt < APPEND_TRIES; attempt++) {
     try {
@@ -186,6 +208,8 @@ export async function appendEntries($: EngineInterface, path: string, items: Ite
       const after = await stat()
       if (stampOf(before) !== stampOf(after)) continue
       let n = maxId(old)
+      // The next id is the highest of every layout's journal (D16): a switch of layout never reuses an id.
+      for (const other of others) n = Math.max(n, maxId((await readIf($, other).catch(() => null)) ?? ''))
       const ids: string[] = []
       const entries: string[] = []
       for (const item of items) {
@@ -221,7 +245,8 @@ export async function captureCkpt($: EngineInterface, root: string, stream: stri
     const iso = new Date(await $.clock.now()).toISOString()
     const sid = await $.session.id().catch(() => 'unknown')
     const items = trailers.map(trailer => ({ iso, sid, trailer }))
-    const ids = await enqueue(() => appendEntries($, journalPath(root, stream), items))
+    const mode = await modeOf($, root)
+    const ids = await enqueue(() => appendEntries($, journalPath(root, stream, mode), items, [journalPath(root, stream, otherMode(mode))]))
     return ids === null ? { ids: [], ok: false } : { ids, ok: true }
   } catch {
     return { ids: [], ok: false }

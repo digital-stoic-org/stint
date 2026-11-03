@@ -47,7 +47,8 @@ import {
   slugify,
   streamsFromNames,
 } from '../hooks/pit.ts'
-import { CHECKPOINT_KEY, RULE_BLOCK, RULE_TEXT, journalRule } from '../hooks/checkpoint.ts'
+import { CHECKPOINT_KEY, RULE_BLOCK, RULE_TEXT, journalRule, unionEntries } from '../hooks/checkpoint.ts'
+import { LIFECYCLE_KEY, forbiddenStream, otherMode, streamDirNames, streamPaths } from '../hooks/paths.ts'
 import { CREW_BLOCK, CREW_KEY, CREW_STORE, CREW_TEXT, addSample, crewText } from '../hooks/crew.ts'
 import { PHASE_FOLLOW_TURNS, PHASE_HINT, PHASE_HINT_FLOOR, phaseHintText } from '../hooks/pit.ts'
 
@@ -2730,4 +2731,211 @@ test('crew section: the cap cuts crew lines before un-id\'d decisions', () => {
   expect(r.cut.some(c => c.startsWith('crew -'))).toBe(true)
   const left = (k: string) => section(r.state, k).length
   if (left('decisions') < 50) expect(left('crew')).toBe(0)
+})
+
+// ---------- lifecycle: per-stream layout behind the opt-in (L1 + L2) ----------
+
+const LIFE = { options: { lifecycle: 'on' } }
+// After the dates the seeded notes carry.
+const LATER = Date.parse('2026-11-01T00:00:00.000Z')
+const MARKER = `${CWD}/.stint/lifecycle`
+const NEW_NOTES = `${CWD}/.stint/proj/notes.md`
+const NEW_JOURNAL = `${CWD}/.stint/proj/journal.md`
+const OLD_NOTES_TEXT = (saved: string, stint: number) => `stream: proj\nsaved: ${saved} s0\nstatus: building\nprevious_session: none\ngoal: g\nstint: ${stint}\n\nread_first:\ndeliverable: /w/x.md\n`
+const setLifecycleRow = ($: Engine, value: string) =>
+  $.config.set({ key: LIFECYCLE_KEY, value, previous: 'off', provider: { plugin: 'stint', tier: 'plugin' }, origin: { kind: 'composer' } } as never)
+const lifecycleRow = (on: On) => on('config.set', { key: LIFECYCLE_KEY }, (_$, e) => ({ value: e.value }))
+
+test('streamPaths: off is the flat layout, on is the per-stream one, trailing slashes absorbed', () => {
+  expect(streamPaths('/work', 'proj', 'off')).toEqual({ dir: '/work/.stint', notes: '/work/.stint/proj-notes.md', journal: '/work/.stint/proj-journal.md', archive: '/work/.stint/archive', rel: '.stint/proj-notes.md', name: 'proj-notes.md' })
+  expect(streamPaths('/work/', 'proj', 'on')).toEqual({ dir: '/work/.stint/proj', notes: '/work/.stint/proj/notes.md', journal: '/work/.stint/proj/journal.md', archive: '/work/.stint/proj/archive', rel: '.stint/proj/notes.md', name: 'proj/notes.md' })
+  expect(otherMode('on')).toBe('off')
+  expect(otherMode('off')).toBe('on')
+  expect(overwriteWarning('proj')).toBe('⚠️ proj-notes.md was rewritten by another session; its content was merged into these notes and its previous version is in archive/')
+  expect(overwriteWarning('proj', 'on')).toContain('⚠️ proj/notes.md was rewritten')
+})
+
+test('forbidden names: archive and work are refused under on only', () => {
+  expect(forbiddenStream('archive', 'on')).toContain('"archive" is reserved')
+  expect(forbiddenStream('work', 'on')).toContain('"work" is reserved')
+  expect(forbiddenStream('archive', 'off')).toBeNull()
+  expect(forbiddenStream('proj', 'on')).toBeNull()
+  expect(streamDirNames(['b', 'archive', 'a', 'work', 'bad name'], n => /^[a-z]+$/.test(n))).toEqual(['a', 'b'])
+})
+
+test('unionEntries: one entry per id, ascending, the first text wins an id held by two', () => {
+  const a = jEntry(1, 'open: a') + jEntry(3, 'open: c')
+  const b = jEntry(2, 'open: b') + jEntry(3, 'open: other')
+  const u = unionEntries([a, b])
+  expect(u.map(e => e.id)).toEqual(['c01', 'c02', 'c03'])
+  expect(u[2]!.trailer).toContain('open: c')
+  expect(takeEntries(OLD_NOTES_TEXT('2026-10-21T10:00:00.000Z', 1) + 'journal_cursor: c01\n', u).entries.map(e => e.id)).toEqual(['c02', 'c03'])
+})
+
+test('lifecycle off (the default): marker or not, the flat layout, texts as before', async ($, on) => {
+  const w = world(on, OK())
+  w.files.set(MARKER, '')
+  await fresh($)
+  const out = await pit($)
+  expect(out.text).toBe('pit: saved .stint/proj-notes.md')
+  expect(w.files.has(NOTES)).toBe(true)
+  expect(w.files.has(NEW_NOTES)).toBe(false)
+})
+
+test('lifecycle on without the marker file: still the flat layout', async ($, on) => {
+  const w = world(on, OK())
+  await fresh($)
+  const out = await pit($)
+  expect(out.text).toBe('pit: saved .stint/proj-notes.md')
+  expect(w.files.has(NOTES)).toBe(true)
+  expect([...w.files.keys()].some(p => p.startsWith(`${CWD}/.stint/proj/`))).toBe(false)
+})
+
+test('lifecycle on with the marker: notes, archive and the path in the pit line follow the per-stream layout', { ...LIFE }, async ($, on) => {
+  const w = world(on, OK())
+  w.files.set(MARKER, '')
+  await fresh($)
+  const out = await pit($)
+  expect(out.text).toBe('pit: saved .stint/proj/notes.md')
+  expect(w.files.get(NEW_NOTES)).toContain('stream: proj')
+  expect(w.files.has(NOTES)).toBe(false)
+  await w.clock.advance(60_000)
+  await pit($)
+  const archives = [...w.files.keys()].filter(p => p.startsWith(`${CWD}/.stint/proj/archive/`))
+  expect(archives).toHaveLength(1)
+  expect(archives[0]).toMatch(/\/proj-notes-\d{8}-\d{4}\.md$/)
+  expect(archived(w)).toEqual([])
+  expect(w.files.get(NEW_NOTES)).toContain('stint: 3')
+})
+
+test('lifecycle on: the journal is written under the stream folder and the rule names that path', { ...LIFE }, async ($, on) => {
+  const w = world(on, OK())
+  withStat(w, on)
+  baseContext(on)
+  w.files.set(MARKER, '')
+  await fresh($)
+  await title($, 'proj')
+  await answer($, TRAIL1)
+  expect(w.files.get(NEW_JOURNAL)).toMatch(/^### c01 /)
+  expect(w.files.has(JOURNAL)).toBe(false)
+  const r = await ctx($, 'Be brief.')
+  expect(r.blocks.find(b => b.name === RULE_BLOCK)!.text).toContain(journalRule(NEW_JOURNAL))
+})
+
+test('cNN continuity: the next id is the highest of both layouts, in both modes', { ...LIFE }, async ($, on) => {
+  const w = world(on, OK())
+  withStat(w, on)
+  lifecycleRow(on)
+  w.files.set(MARKER, '')
+  w.files.set(JOURNAL, jEntry(7, 'open: old'))
+  await fresh($)
+  await title($, 'proj')
+  await answer($, TRAIL1)
+  expect(w.files.get(NEW_JOURNAL)).toMatch(/^### c08 /)
+  await setLifecycleRow($, 'off')
+  await answer($, TRAIL2)
+  expect(w.files.get(JOURNAL)).toContain('### c09 ')
+  await setLifecycleRow($, 'on')
+  await answer($, TRAIL1)
+  expect(w.files.get(NEW_JOURNAL)).toContain('### c10 ')
+  // nothing is lost, nothing is rewritten: the old journal holds c07 and c09, the new one c08 and c10
+  expect([...(w.files.get(JOURNAL) ?? '').matchAll(/^### (c\d+) /gm)].map(m => m[1])).toEqual(['c07', 'c09'])
+  expect([...(w.files.get(NEW_JOURNAL) ?? '').matchAll(/^### (c\d+) /gm)].map(m => m[1])).toEqual(['c08', 'c10'])
+})
+
+const journalUnion = async ($: Engine, w: World, notesPath: string, journalLine: string) => {
+  w.files.set(JOURNAL, jEntry(1, 'open: a') + jEntry(2, 'open: b') + jEntry(3, 'open: c'))
+  w.files.set(NEW_JOURNAL, jEntry(4, 'open: d') + jEntry(5, 'open: e'))
+  w.files.set(notesPath, OLD_NOTES_TEXT('2026-10-21T10:00:00.000Z', 1).replace('goal: g', 'goal: g\njournal_cursor: c02'))
+  await fresh($)
+  await pit($)
+  const prompt = w.forkPrompts[0] ?? ''
+  for (const id of ['c03', 'c04', 'c05']) expect(prompt).toContain(id)
+  expect(prompt).not.toContain('open: b')
+  expect(w.files.get(notesPath)).toContain('journal_cursor: c05')
+  expect(w.files.get(notesPath)).toContain(journalLine)
+}
+
+test('journal read, on: the union of both layouts, so no entry after the cursor is skipped', { ...LIFE }, async ($, on) => {
+  const w = world(on, OK(), LATER)
+  w.files.set(MARKER, '')
+  await journalUnion($, w, NEW_NOTES, `journal: ${NEW_JOURNAL}`)
+})
+
+test('journal read, off: the same union, so a switch back never skips an entry', async ($, on) => {
+  const w = world(on, OK(), LATER)
+  await journalUnion($, w, NOTES, `journal: ${JOURNAL}`)
+})
+
+test('notes read: the newest saved: across both layouts, in both modes; the other layout is never rewritten', { ...LIFE }, async ($, on) => {
+  const w = world(on, OK(), LATER)
+  lifecycleRow(on)
+  w.files.set(MARKER, '')
+  w.files.set(NOTES, OLD_NOTES_TEXT('2026-10-25T10:00:00.000Z', 5))
+  w.files.set(NEW_NOTES, OLD_NOTES_TEXT('2026-10-20T10:00:00.000Z', 2))
+  const oldText = w.files.get(NOTES)
+  await fresh($)
+  // on: the flat file is newer, so it is the previous notes (stint 5 -> 6), written to the per-stream path
+  await pit($)
+  expect(w.files.get(NEW_NOTES)).toContain('stint: 6')
+  expect(w.files.get(NOTES)).toBe(oldText)
+  // off: now the per-stream file is the newest; the flat file is written from it (6 -> 7)
+  await setLifecycleRow($, 'off')
+  await w.clock.advance(60_000)
+  await pit($)
+  expect(w.files.get(NOTES)).toContain('stint: 7')
+})
+
+test('toggle on -> off -> on: the notes follow the newest save, nothing is lost', { ...LIFE }, async ($, on) => {
+  const w = world(on, OK())
+  lifecycleRow(on)
+  w.files.set(MARKER, '')
+  await fresh($)
+  await pit($)
+  expect(w.files.get(NEW_NOTES)).toContain('stint: 2')
+  await setLifecycleRow($, 'off')
+  await w.clock.advance(60_000)
+  await pit($)
+  expect(w.files.get(NOTES)).toContain('stint: 3')
+  expect(w.files.get(NEW_NOTES)).toContain('stint: 2')
+  await setLifecycleRow($, 'on')
+  await w.clock.advance(60_000)
+  await pit($)
+  expect(w.files.get(NEW_NOTES)).toContain('stint: 4')
+  expect(w.files.get(NOTES)).toContain('stint: 3')
+})
+
+test('streams listing reads both layouts; a stream folder holding only work/ is no stream', async ($, on) => {
+  const w = world(on, OK())
+  w.files.set('/work/.stint/a-notes.md', 'x')
+  w.files.set('/work/.stint/b/notes.md', 'y')
+  w.files.set('/work/.stint/c/work/BRIEF-x.md', 'z')
+  w.files.set('/work/.stint/d/journal.md', 'z')
+  w.files.set('/work/.stint/archive/a-notes-20261101-1000.md', 'old')
+  await fresh($)
+  expect((await rejoin($)).text).toBe('rejoin: several notes here, pick one with /rejoin <stream>: a, b')
+})
+
+test('lifecycle on: rejoin loads the per-stream notes; the listing and the hint show the same streams', { ...LIFE }, async ($, on) => {
+  const w = world(on, OK())
+  w.files.set(MARKER, '')
+  w.files.set('/work/.stint/b/notes.md', 'stream: b\nsaved: 2026-10-21T10:00:00.000Z s0\n')
+  w.files.set('/work/.stint/c/work/PLAN-x.md', 'z')
+  await fresh($)
+  expect((await rejoin($)).text).toBe('rejoin: loading stream "b" as the first message.')
+})
+
+test('forbidden names under on: /pit archive and /rejoin work are refused, nothing written or bound; off still allows them', { ...LIFE }, async ($, on) => {
+  const w = world(on, OK())
+  lifecycleRow(on)
+  w.files.set(MARKER, '')
+  await fresh($)
+  const p = await pit($, 'archive')
+  expect(p.text).toContain('"archive" is reserved by the per-stream layout')
+  expect(w.forkPrompts).toHaveLength(0)
+  expect([...w.files.keys()].filter(f => f !== MARKER)).toEqual([])
+  const r = await rejoin($, 'work')
+  expect(r.text).toContain('"work" is reserved by the per-stream layout')
+  await setLifecycleRow($, 'off')
+  expect((await pit($, 'archive')).text).toBe('pit: saved .stint/archive-notes.md')
 })

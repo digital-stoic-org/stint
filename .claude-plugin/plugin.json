@@ -59,6 +59,16 @@
         "off",
         "on"
       ]
+    },
+    "lifecycle": {
+      "type": "string",
+      "title": "stint · Lifecycle (experimental)",
+      "description": "Experimental: in a project that holds a .stint/lifecycle file, keep each stream's notes, journal and archive under .stint/<stream>/ instead of flat files in .stint/, reading both layouts and never moving or deleting an old file; off: flat files as before.",
+      "default": "off",
+      "options": [
+        "off",
+        "on"
+      ]
     }
   }
 }
