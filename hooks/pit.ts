@@ -2,7 +2,7 @@ import type { EngineInterface, On } from 'claude-code'
 
 import { pitDone, pitStart, refresh as refreshDash, setLap, thresholdsOf } from './dash.ts'
 import type { Entry } from './checkpoint.ts'
-import { RULE_TEXT, captureCkpt, checkpointOn, claudeMdHasRule, hasPhase, hasPromote, journalPath, journalRule, promotesOf, readJournal, withRule } from './checkpoint.ts'
+import { RULE_TEXT, captureCkpt, checkpointOn, claudeMdHasRule, hasPhase, hasPromote, journalPath, journalRule, promotesOf, readJournal, trailersOf, unjournaled, withRule } from './checkpoint.ts'
 import { NOTES_DIR, forbiddenStream, lifecycleSetting, modeOf, otherMode, readNotes, streamDirNames, streamPaths } from './paths.ts'
 import type { Mode } from './paths.ts'
 import { lifecycleText, promoteCheck, promoteLines, rewritePaths, sweepLine, sweepPlan, withLifecycle } from './lifecycle.ts'
@@ -79,6 +79,8 @@ let autopitTimer: { cancel: () => void } | null = null
 let armGen = 0
 let lastTurnAt: number | null = null
 let turnRunning = false
+// The trailers the last main-loop Stop of this turn journaled; turn.complete takes them out of its answer (the same message). Reset at each turn end and prompt.
+let stopTrailers: string[] = []
 // The ready turn of an auto-pit must not arm the next one.
 let skipNextArm = false
 // An auto-pit is between its guards and its /clear: a prompt or a turn starting then aborts it.
@@ -849,8 +851,9 @@ async function followRename($: EngineInterface, from: string, to: string) {
 }
 
 // Journals the trailers of a main-loop answer under the session root; a failed write shows one red board line for a few seconds. Never throws.
-async function journalCkpt($: EngineInterface, answer: string) {
-  if (!checkpointOn()) return
+// true = written, or nothing to write; false = not journaled.
+async function journalCkpt($: EngineInterface, answer: string): Promise<boolean> {
+  if (!checkpointOn()) return true
   try {
     const stream = current()
     const root = await rootNow($)
@@ -859,7 +862,7 @@ async function journalCkpt($: EngineInterface, answer: string) {
     const res = refused === null ? await captureCkpt($, root, stream, answer) : { ids: [] as string[], ok: false }
     if (res.ok) {
       if (res.ids.length > 0) journaled.set(stream, journalPath(root, stream, mode))
-      return
+      return true
     }
     const board = refused === null ? 'checkpoint not journaled: write failed' : `checkpoint not journaled: stream name "${stream}" is reserved`
     const line: Line = { status: `⚠ ${board}`, board, bad: true }
@@ -870,8 +873,10 @@ async function journalCkpt($: EngineInterface, answer: string) {
       outcome = undefined
       paint($)
     })
+    return false
   } catch (err) {
     $.ui.log(`stint: checkpoint not journaled: ${String(err)}`, { to: 'debug' })
+    return false
   }
 }
 
@@ -984,8 +989,10 @@ export function registerPit(on: On) {
       try {
         turnRunning = false
         lastTurnAt = await $.clock.now()
-        // The checkpoint trailers of this answer are journaled before an auto-pit can fork: the fork then sees them.
-        if (e.reason === 'answer') await journalCkpt($, e.answer)
+        const done = stopTrailers
+        stopTrailers = []
+        // The checkpoint trailers of this answer are journaled before an auto-pit can fork: the fork then sees them. Those the last Stop journaled are not written twice.
+        if (e.reason === 'answer') await journalCkpt($, unjournaled(e.answer, done))
         // The same answer's `phase:` decides the hint; an aborted or failed turn just drops it.
         await notePhase($, e.reason === 'answer' ? e.answer : '')
         // The ready turn of an auto-pit never re-triggers: neither the idle wait nor the ceiling.
@@ -1001,6 +1008,24 @@ export function registerPit(on: On) {
     }
     return result
   }).catch(($, e, next) => next(e))
+
+  // A Stop that a hook blocks (a /goal not met yet) continues the same turn, and turn.complete carries only the turn's last answer: each Stop journals its own message.
+  // Main loop only; no message, or a failed write, leaves it to turn.complete.
+  on('classic.Stop', async ($, e, next) => {
+    const result = await next(e)
+    if (e.agent_id === undefined && e.last_assistant_message !== undefined) {
+      try {
+        stopTrailers = (await journalCkpt($, e.last_assistant_message)) && checkpointOn() ? trailersOf(e.last_assistant_message) : []
+      } catch (err) {
+        stopTrailers = []
+        $.ui.log(`stint: Stop checkpoint not journaled: ${String(err)}`, { to: 'debug' })
+      }
+    }
+    return result
+  }).catch(($, e, next) => {
+    noteCaught($, 'classic.Stop', next.error)
+    return next(e)
+  })
 
   // The rule that teaches the trailer reaches the model as one context block per conversation (first request, again after /clear and /compact),
   // unless the project's own instructions already hold it. The crew block (crew.ts) rides the same hook, after it, with its own setting and skip:
@@ -1072,6 +1097,7 @@ export function registerPit(on: On) {
   on('classic.UserPromptSubmit', async ($, e, next) => {
     // Any prompt, typed or injected, starts a turn and ends the idle period. One that lands while an auto-pit is saving aborts it before the /clear.
     turnRunning = true
+    stopTrailers = []
     cancelAutopit($)
     if (autoRunning) autoAborted = true
     // The hints were seen: they go at the first prompt.

@@ -94,6 +94,19 @@ export function trailersOf(answer: string): string[] {
   return (answer.match(/<!-- ckpt[\s\S]*?-->/g) ?? []).map(t => t.trim())
 }
 
+// The trailers of `answer` left once those already journaled are taken out, one occurrence each, rejoined as an answer.
+export function unjournaled(answer: string, done: readonly string[]): string {
+  const left = [...done]
+  return trailersOf(answer)
+    .filter(t => {
+      const i = left.indexOf(t)
+      if (i < 0) return true
+      left.splice(i, 1)
+      return false
+    })
+    .join('\n')
+}
+
 // The answer closes a phase: one of its closed trailers holds a `phase:` clause.
 export const hasPhase = (answer: string) => trailersOf(answer).some(t => parseTrailer(t).some(c => c.type === 'phase'))
 

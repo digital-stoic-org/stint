@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
-import { APPEND_TRIES, CLAUSES, RULE_TEXT, ROUTE, checkpointOn, entryText, hasPhase, hasPromote, hideTrailer, journalPath, journalRule, maxId, pad, parseJournal, parseTrailer, promotesOf, setCheckpoint, splitTrailer, trailersOf } from '../hooks/checkpoint.ts'
+import { APPEND_TRIES, CLAUSES, RULE_TEXT, ROUTE, checkpointOn, entryText, hasPhase, hasPromote, hideTrailer, journalPath, journalRule, maxId, pad, parseJournal, parseTrailer, promotesOf, setCheckpoint, splitTrailer, trailersOf, unjournaled } from '../hooks/checkpoint.ts'
 
 const TRAILER = '<!-- ckpt decision: keep A · reasoning: B follows -->'
 
@@ -250,6 +250,7 @@ function world(on: On, text?: string): FakeFs {
   on('session.measure', (_$, e) => ({ changed: [...e.changed] }))
   on('turn.start', (_$, e) => ({ turnId: e.turnId }))
   on('turn.complete', (_$, e) => ({ text: e.answer }))
+  on('classic.Stop', () => ({}))
   const store = new Map<string, unknown>()
   on('store.get', (_$, e) => ({ value: store.get(e.key) }))
   on('store.set', (_$, e) => (store.set(e.key, e.value), { value: undefined }))
@@ -355,6 +356,61 @@ test('journal: two answers closed together in one process are serialized, ids co
   const f = world(on, FIRST)
   await Promise.all([answered($, `A\n${MINE}`, 't1'), answered($, `B\n${MINE}`, 't2')])
   expect(idsOf(f)).toEqual(['c01', 'c02', 'c03'])
+})
+
+// ---------- Stop journaling (/goal: one turn, one Stop per iteration) ----------
+
+const stopped = ($: Engine, message: string | undefined, active = false, agent?: string) =>
+  $.classic.Stop({ stop_hook_active: active, ...(message !== undefined ? { last_assistant_message: message } : {}), ...(agent !== undefined ? { agent_id: agent } : {}) } as never)
+const trailersIn = (f: FakeFs) => parseJournal(f.text ?? '').map(e => e.trailer)
+
+test('Stop: a /goal turn (three Stops, one turn.complete) journals every iteration once, in order', async ($, on) => {
+  const f = world(on)
+  await stopped($, 'a\n<!-- ckpt decision: wrote a -->')
+  await stopped($, 'b\n<!-- ckpt decision: wrote b -->', true)
+  await stopped($, 'c\n<!-- ckpt decision: wrote c -->', true)
+  await answered($, 'c\n<!-- ckpt decision: wrote c -->')
+  expect(trailersIn(f)).toEqual(['<!-- ckpt decision: wrote a -->', '<!-- ckpt decision: wrote b -->', '<!-- ckpt decision: wrote c -->'])
+})
+
+test('Stop: a plain turn (one Stop, then turn.complete with the same answer) journals once', async ($, on) => {
+  const f = world(on, FIRST)
+  await stopped($, `Done.\n${MINE}`)
+  await answered($, `Done.\n${MINE}`)
+  expect(idsOf(f)).toEqual(['c01', 'c02'])
+  expect(f.writes).toBe(1)
+})
+
+test('Stop: no message, or a sub-agent\'s Stop, leaves the journaling to turn.complete', async ($, on) => {
+  const f = world(on, FIRST)
+  await stopped($, undefined)
+  await stopped($, `sub\n<!-- ckpt open: from a sub-agent -->`, false, 'a1')
+  await answered($, `Done.\n${MINE}`)
+  expect(trailersIn(f)).toEqual(['<!-- ckpt decision: base -->', MINE])
+})
+
+test('Stop: a turn.complete answer with a trailer the last Stop did not hold journals only that one', async ($, on) => {
+  const f = world(on, FIRST)
+  await stopped($, `Done.\n${MINE}`)
+  await answered($, `Done.\n${MINE}\n<!-- ckpt open: late -->`)
+  expect(trailersIn(f)).toEqual(['<!-- ckpt decision: base -->', MINE, '<!-- ckpt open: late -->'])
+})
+
+test('Stop: the next prompt forgets the last Stop, so a repeated trailer is journaled again', async ($, on) => {
+  const f = world(on, FIRST)
+  on('classic.UserPromptSubmit', () => ({}))
+  await stopped($, `Done.\n${MINE}`)
+  await $.classic.UserPromptSubmit({ prompt: 'x' } as never)
+  await answered($, `Done.\n${MINE}`)
+  expect(idsOf(f)).toEqual(['c01', 'c02', 'c03'])
+})
+
+test('unjournaled: takes out each done trailer once, keeps the order of the rest', () => {
+  const a = '<!-- ckpt decision: a -->'
+  const b = '<!-- ckpt open: b -->'
+  expect(unjournaled(`x ${a} y ${b} z ${a}`, [a])).toBe(`${b}\n${a}`)
+  expect(unjournaled(`x ${a}`, [])).toBe(a)
+  expect(unjournaled('no trailer', [a])).toBe('')
 })
 
 test('parseTrailer: promote keeps its arrow in the text, and two promote clauses give two entries', () => {
