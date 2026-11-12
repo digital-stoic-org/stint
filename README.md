@@ -175,7 +175,7 @@ Do not load stint and stoa together.
 
 ## Lifecycle (experimental)
 
-Off by default. Agents leave briefs, reports, analyses and logs behind, and these scratch files pile up in the project next to your own. With lifecycle on, each stream gets its own scratch folder under `.stint/`, the model is told to write its intermediate files there, and every pit clears that folder into an archive. stint never deletes a file.
+Off by default. Agents leave mandates, reports, probes and logs behind, and these scratch files pile up in the project next to your own. With lifecycle on, each stream gets its own scratch folder under `.stint/`, the model is told to write its intermediate files there, and every pit clears that folder into an archive. stint never deletes a file.
 
 Turn it on per project, in two steps: set `stint · Lifecycle (experimental)` to `on` in `/config` (or `pluginConfigs.stint.options.lifecycle`), then create the marker file in the project root with `mkdir -p .stint && touch .stint/lifecycle`. With the setting `off`, or without the marker file, stint behaves as in 0.5.5: flat files, no block, no sweep, no promote.
 
@@ -190,11 +190,11 @@ Layout, per stream:
 
 The names `archive` and `work` cannot be stream names while lifecycle is on. stint reads both layouts and takes the newest `saved:` of the two, so an older flat file never hides newer notes; it never moves, rewrites or deletes a file of the other layout.
 
-**Rule block.** Like the crew text, one context block (`stintLifecycle`) reaches the model at the start of each conversation and after `/clear` and `/compact`. It names the stream's work folder and tells the model to write every intermediate there by absolute path, never to create a file named `BRIEF-*`, `REPORT-*`, `ANALYSIS-*` or `PROBE-*` in the project, to use no versioned names (`-v2`, `-final`), and how to promote a finished file. It is left out when your own instructions (`CLAUDE.md`) already hold its heading `## Work files (stint)`. Its token cost has not been measured.
+**Rule block.** Like the crew text, one context block (`stintLifecycle`) reaches the model at the start of each conversation and after `/clear` and `/compact`. It names the stream's work folder and tells the model to write every intermediate there by absolute path, never to create a file named `mandate-*`, `report-*` or `probe-*` in the project, to use no versioned names (`-v2`, `-final`), and how to promote a finished file. It is left out when your own instructions (`CLAUDE.md`) already hold its heading `## Work files (stint)`. Its token cost has not been measured.
 
 **Sweep.** At every pit (`/pit`, `/pit --save`, auto-pit), once the notes are written, the files directly in the pitting stream's `work/` move to `archive/work/` in the same stream folder, except:
 
-- files named `PLAN-*` or `SPEC-*`, which stay until you promote them;
+- files named `plan-*` or `spec-*` (in any case, so `PLAN-*` too), which stay until you promote them;
 - files whose name appears in the new notes (cited), which stay for the next pit;
 - files whose name starts with a dot, which are never touched.
 

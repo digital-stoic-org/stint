@@ -1,6 +1,6 @@
 {
   "name": "stint",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "Run your agent in stints. Pit before the redline.",
   "author": {
     "name": "dstoic",
@@ -63,7 +63,7 @@
     "lifecycle": {
       "type": "string",
       "title": "stint · Lifecycle (experimental)",
-      "description": "Experimental, opt-in per project: needs on AND a .stint/lifecycle file in the project (create it with mkdir -p .stint && touch .stint/lifecycle). Each stream then keeps its files under .stint/<stream>/ (notes.md, journal.md, archive/, work/) instead of flat files in .stint/. A rule block (stintLifecycle) is sent to the model at the start of each conversation (and after /clear and /compact), telling it to write its intermediate files (briefs, reports, analyses, probes, logs) in work/, not in the project; it is left out when your CLAUDE.md already holds its heading `## Work files (stint)`. At each pit, the scratch files of work/ are moved to archive/work/ (never deleted), unless the new notes cite them; PLAN- and SPEC- files are never moved. A checkpoint clause `promote: <work path> -> <project path>` moves a file into the project at the next pit; it never overwrites, and a refusal is reported in the pit line. Old flat files are still read and never moved. off: as in 0.5.5, flat files and no block.",
+      "description": "Experimental, opt-in per project: needs on AND a .stint/lifecycle file in the project (create it with mkdir -p .stint && touch .stint/lifecycle). Each stream then keeps its files under .stint/<stream>/ (notes.md, journal.md, archive/, work/) instead of flat files in .stint/. A rule block (stintLifecycle) is sent to the model at the start of each conversation (and after /clear and /compact), telling it to write its intermediate files (mandates, reports, probes, logs) in work/, not in the project; it is left out when your CLAUDE.md already holds its heading `## Work files (stint)`. At each pit, the scratch files of work/ are moved to archive/work/ (never deleted), unless the new notes cite them; plan- and spec- files (any case) are never moved. A checkpoint clause `promote: <work path> -> <project path>` moves a file into the project at the next pit; it never overwrites, and a refusal is reported in the pit line. Old flat files are still read and never moved. off: as in 0.5.5, flat files and no block.",
       "default": "off",
       "options": [
         "off",

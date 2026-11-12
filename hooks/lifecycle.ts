@@ -10,9 +10,9 @@ export const WORK_PLACEHOLDER = '<WORK>'
 
 export function lifecycleText(work: string): string {
   return `${WORK_MARKER}
-- Your work folder is ${WORK_PLACEHOLDER}. Write every intermediate there by absolute path: briefs, reports, analyses, probes, logs, scratch.
+- Your work folder is ${WORK_PLACEHOLDER}. Write every intermediate there by absolute path: mandates, reports, probes, logs, scratch.
 - A delegate writes only in the folder its brief names. Never write in another session's work folder.
-- Project space (everything outside .stint/) belongs to the user: never create a file there named BRIEF-*, REPORT-*, ANALYSIS-* or PROBE-*.
+- Project space (everything outside .stint/) belongs to the user: never create a file there named mandate-*, report-* or probe-*.
 - No versioned names (-v2, -final, -new). Edit a file in place; regenerate a derived file (index, summary, status) in place, never hand-edit or copy it.
 - \`promote:\` moves a finished work file into project space: <absolute work path> -> <absolute project path>; one clause per file, no \`·|;\` in paths, the target's folder must exist and the target must not. The move happens at the next /pit and never overwrites. A delegate names the file in its debrief and does not write the clause.
 - After /rename or /rejoin of another stream, ${WORK_PLACEHOLDER} is stale: use the work/ folder beside the notes path /rejoin prints.`.replaceAll(WORK_PLACEHOLDER, work)
@@ -31,9 +31,10 @@ export function withLifecycle<B extends CtxBlock>(blocks: readonly B[], text: st
 // ---------- sweep (L4): scratch files of a stream's work/ go to archive/work/ at pit ----------
 
 // Scratch = these prefixes and any unknown one; chantier = never swept, only `promote:` moves it (PLAN-lifecycle Q2, Q4). Keep the scratch list equal to line 3 of the block text.
-export const SCRATCH_PREFIXES = ['BRIEF-', 'REPORT-', 'ANALYSIS-', 'PROBE-']
-export const CHANTIER_PREFIXES = ['PLAN-', 'SPEC-']
-export const isChantier = (name: string) => CHANTIER_PREFIXES.some(p => name.startsWith(p))
+// Prefixes are lowercase and matched case-insensitively (PLAN-x.md and plan-x.md are both chantier).
+export const SCRATCH_PREFIXES = ['mandate-', 'report-', 'probe-']
+export const CHANTIER_PREFIXES = ['plan-', 'spec-']
+export const isChantier = (name: string) => CHANTIER_PREFIXES.some(p => name.toLowerCase().startsWith(p))
 
 export type SweepMove = { name: string; src: string; dst: string }
 export type SweepPlan = { move: SweepMove[]; cited: string[] }

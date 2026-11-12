@@ -49,7 +49,7 @@ import {
 } from '../hooks/pit.ts'
 import { CHECKPOINT_KEY, RULE_BLOCK, RULE_TEXT, journalRule, unionEntries } from '../hooks/checkpoint.ts'
 import { LIFECYCLE_KEY, forbiddenStream, otherMode, streamDirNames, streamPaths } from '../hooks/paths.ts'
-import { LIFECYCLE_BLOCK, WORK_MARKER, lifecycleText, promoteCheck, promoteLines, rewritePaths, sweepLine, sweepPlan, withLifecycle } from '../hooks/lifecycle.ts'
+import { LIFECYCLE_BLOCK, SCRATCH_PREFIXES, WORK_MARKER, isChantier, lifecycleText, promoteCheck, promoteLines, rewritePaths, sweepLine, sweepPlan, withLifecycle } from '../hooks/lifecycle.ts'
 import { CREW_BLOCK, CREW_KEY, CREW_STORE, CREW_TEXT, addSample, crewText } from '../hooks/crew.ts'
 import { PHASE_FOLLOW_TURNS, PHASE_HINT, phaseHintText } from '../hooks/pit.ts'
 
@@ -3046,6 +3046,18 @@ test('sweepPlan: scratch and unknown prefixes move, PLAN-/SPEC- never, a cited b
   expect(plan.cited).toEqual(['ANALYSIS-e.md', 'REPORT-b.md'])
   expect(sweepLine({ moved: 0, cited: 0, failed: 0 })).toBeNull()
   expect(sweepLine({ moved: 3, cited: 1, failed: 2 })).toBe('work/ swept: 3 moved to archive/work/, 1 kept (cited in the notes), 2 failed (left in place)')
+})
+
+test('lifecycle prefixes: lowercase, chantier matched in any case, legacy BRIEF-/ANALYSIS- swept as unknown, scratch list = line 3 of the block', () => {
+  for (const n of ['plan-a.md', 'PLAN-a.md', 'Spec-b.md', 'spec-b.md']) expect(isChantier(n)).toBe(true)
+  for (const n of ['mandate-a.md', 'report-b.md', 'probe-c.md', 'REPORT-d.md', 'BRIEF-e.md', 'ANALYSIS-f.md', 'planning.md']) expect(isChantier(n)).toBe(false)
+  const plan = sweepPlan('/W/work', '/W/archive/work', ['mandate-a.md', 'report-b.md', 'probe-c.md', 'plan-d.md', 'Spec-e.md', 'BRIEF-f.md', 'ANALYSIS-g.md'], '')
+  expect(plan.move.map(m => m.name)).toEqual(['ANALYSIS-g.md', 'BRIEF-f.md', 'mandate-a.md', 'probe-c.md', 'report-b.md'])
+  const line3 = lifecycleText('/W/work').split('\n')[3]
+  expect(line3).toContain('never create a file there named mandate-*, report-* or probe-*.')
+  expect(SCRATCH_PREFIXES.every(p => line3.includes(`${p}*`))).toBe(true)
+  expect(line3.match(/\b[\w]+-\*/g)).toHaveLength(SCRATCH_PREFIXES.length)
+  expect(lifecycleText('/W/work').split('\n')[1]).toContain('mandates, reports, probes, logs, scratch.')
 })
 
 test('lifecycle on: /pit moves the scratch files of its own work/ to archive/work/, keeps PLAN-, cited and other streams\' files, and says so in the pit line', { ...LIFE }, async ($, on) => {
