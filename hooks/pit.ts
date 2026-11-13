@@ -11,7 +11,7 @@ import { CREW_STORE, addSample, crewOn, crewText, numbersOf, promptTokens, withC
 import { debugOn, sidNow, startWatch, stopWatch, trace, writeReport } from './debug.ts'
 import { AUTOPIT_CEILING, AUTOPIT_MIN_TOKENS, getAutopitInfo, getIdleFire, setAutopitInfo, setIdleFire, setPitBoard, setPitLine, writeStatus } from './status.ts'
 import type { AutopitInfo } from './status.ts'
-import { ARCHIVE_TRIES, archiveName, autoStreamOf, COMMANDS, notesPath, overWall, parseArgs, RESERVED, resolveStream, slugify, STREAM_RE, streamsFromNames } from './streams.ts'
+import { ARCHIVE_TRIES, archiveName, autoStreamOf, COMMANDS, DEFAULT_STREAM, notesPath, overWall, parseArgs, RESERVED, resolveStream, slugify, STREAM_RE, streamsFromNames } from './streams.ts'
 import { autoLine, AUTOPIT_DEFAULT, AUTOPIT_KEY, AUTOPIT_SHOW_AFTER_MS, autopitDelayMs, autopitSkip, boardProgress, CEILING_BELOW, ceilingPercent, ceilingSkip, elapsed, hintBoard, hintText, PHASE_FOLLOW_TURNS, phaseHintText, progressText, savedBoard, shortReason } from './autopit.ts'
 import type { AutoKind, AutoMark, CeilingGate } from './autopit.ts'
 import { agentLinesOf, AGENTS_UNKNOWN, assemble, parseFork, parseForkBody, stintOf, takeEntries } from './notes.ts'
@@ -53,6 +53,10 @@ let boundArg: string | null = null
 let titleStream: string | null = null
 // This session's own stream name (autoStreamOf), set at session start; kept across /clear, recomputed on startup/resume/fork.
 let autoStream: string | null = null
+// A classic hook (SessionStart, UserPromptSubmit) ran in this mod. Still false after a main turn = a mod ahead of stint skips them:
+// no title (/rename unseen), no notes re-injected after /clear. Told once per mod load.
+let classicSeen = false
+let degradedShown = false
 // The pit's message: running flow, then last sticky outcome, then the session-start hint. `status` goes to the status line
 // (only where the band was never raised), `board` to the band's board slot; `bad` draws it red. An empty status writes nothing.
 type Line = { status: string; board: string; bad?: boolean }
@@ -70,6 +74,12 @@ const current = () => resolveStream(boundArg, titleStream, autoStream)
 
 async function setAutoStream($: EngineInterface) {
   autoStream = autoStreamOf(await rootNow($), await $.session.id().catch(() => ''))
+}
+
+// Lazy fallback: the classic hooks that name the session can be skipped by a mod ahead of stint; an unnamed session must not fall back to the shared default.
+// Only fills a missing name: autoStream is kept across /clear on purpose.
+async function ensureAuto($: EngineInterface) {
+  if (autoStream === null) await setAutoStream($)
 }
 
 // Auto-pit state. The mode is read from the /config row on first use and follows config.set; the rest is rebuilt by the next turn.complete.
@@ -671,6 +681,7 @@ async function pit($: EngineInterface, args: string) {
 // The pit proper, shared by /pit and the idle trigger (`auto`: the mark the fresh session shows).
 // `save` (/pit --save): the same fork, notes and archive, then stop: no pending, no /clear, no lap change, the context is untouched.
 async function runPit($: EngineInterface, argStream: string | undefined, auto?: AutoMark, save = false) {
+  await ensureAuto($)
   const cwd = await rootNow($)
   const mode = await modeOf($, cwd)
   const room = await headroom($)
@@ -698,6 +709,8 @@ async function runPit($: EngineInterface, argStream: string | undefined, auto?: 
   hint = undefined
   const stream = current()
   const paths = streamPaths(cwd, stream, mode)
+  // Nobody named this session (no argument, no title) and it still lands on the shared default: say so, the next unnamed session would share it.
+  const shared = stream === DEFAULT_STREAM && boundArg === null && titleStream === null ? `\nno stream name: saved to the shared stream "${DEFAULT_STREAM}". Pass a name to keep this work apart: /pit <stream>` : ''
 
   // Two saves never overlap (a --save and an auto-pit that both passed their checks before either set the flag): the second leaves at once.
   if (saving) return { text: `pit: a pit is already running, its outcome will show in the status line` }
@@ -728,7 +741,7 @@ async function runPit($: EngineInterface, argStream: string | undefined, auto?: 
   trace($, 'notes.written', { path: paths.notes, chars: built.state.length }, stream)
   if (save) {
     await savedOnly($, stream, built)
-    return { text: `pit: saved ${paths.rel} (no clear)${built.promote ? `\n${built.promote}` : ''}${built.sweep ? `\n${built.sweep}` : ''}${built.warn ? `\n${built.warn}` : ''}` }
+    return { text: `pit: saved ${paths.rel} (no clear)${built.promote ? `\n${built.promote}` : ''}${built.sweep ? `\n${built.sweep}` : ''}${built.warn ? `\n${built.warn}` : ''}${shared}` }
   }
   pending = { text: built.state, createdAt: await $.clock.now(), root: cwd, stream, ...(debugOn() ? { sid: await sidNow($) } : {}), ...(auto ? { auto } : {}), ...(auto && built.warn ? { warn: built.warn } : {}) }
   try {
@@ -764,7 +777,7 @@ async function runPit($: EngineInterface, argStream: string | undefined, auto?: 
       },
     )
   })
-  return { text: `pit: saved ${paths.rel}${built.promote ? `\n${built.promote}` : ''}${built.sweep ? `\n${built.sweep}` : ''}${!auto && built.warn ? `\n${built.warn}` : ''}` }
+  return { text: `pit: saved ${paths.rel}${built.promote ? `\n${built.promote}` : ''}${built.sweep ? `\n${built.sweep}` : ''}${!auto && built.warn ? `\n${built.warn}` : ''}${shared}` }
 }
 
 async function rejoin($: EngineInterface, args: string) {
@@ -855,6 +868,7 @@ async function followRename($: EngineInterface, from: string, to: string) {
 async function journalCkpt($: EngineInterface, answer: string): Promise<boolean> {
   if (!checkpointOn()) return true
   try {
+    await ensureAuto($)
     const stream = current()
     const root = await rootNow($)
     const mode = await modeOf($, root)
@@ -993,6 +1007,12 @@ export function registerPit(on: On) {
         stopTrailers = []
         // The checkpoint trailers of this answer are journaled before an auto-pit can fork: the fork then sees them. Those the last Stop journaled are not written twice.
         if (e.reason === 'answer') await journalCkpt($, unjournaled(e.answer, done))
+        // A main turn ended and no classic hook ever ran: a mod ahead of stint skips them. Told once, the per-event host notices do not say what breaks.
+        if (!classicSeen && !degradedShown) {
+          degradedShown = true
+          await ensureAuto($)
+          $.ui.toast(`stint: a plugin running before stint skips its session hooks. /rename is not seen and notes do not reload after /pit (use /rejoin). Saving to stream "${current()}".`, { timeoutMs: ERROR_TOAST_MS })
+        }
         // The same answer's `phase:` decides the hint; an aborted or failed turn just drops it.
         await notePhase($, e.reason === 'answer' ? e.answer : '')
         // The ready turn of an auto-pit never re-triggers: neither the idle wait nor the ceiling.
@@ -1095,6 +1115,7 @@ export function registerPit(on: On) {
   })
 
   on('classic.UserPromptSubmit', async ($, e, next) => {
+    classicSeen = true
     // Any prompt, typed or injected, starts a turn and ends the idle period. One that lands while an auto-pit is saving aborts it before the /clear.
     turnRunning = true
     stopTrailers = []
@@ -1116,6 +1137,7 @@ export function registerPit(on: On) {
   })
 
   on('classic.SessionStart', async ($, e, next) => {
+    classicSeen = true
     trace($, 'session.start', { source: e.source, sid: e.session_id, cwd: e.cwd })
     hint = undefined
     // A new context: the phase hint and the follow measure belong to the old one.
